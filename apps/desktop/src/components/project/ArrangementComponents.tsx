@@ -1114,7 +1114,7 @@ function LaneClip({ track, selectedProjectId, deleteTrack, trackZoom, laneWidth,
           menu so the clip stays clean. */}
       {clipIndex === 0 && (
         <div className="absolute left-2 top-1 z-10 pointer-events-none flex flex-col gap-1 items-start" style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.8))' }}>
-          <p className="text-[10px] font-bold text-white/80 truncate max-w-[120px]">{displayName}</p>
+          <p className="text-[10px] font-bold text-white/80 whitespace-nowrap">{displayName}</p>
         </div>
       )}
     </div>
