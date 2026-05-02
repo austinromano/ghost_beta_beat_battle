@@ -993,7 +993,7 @@ export default function PluginLayout() {
                                 </motion.button>
                               )}
                             />
-                            <div className="flex items-center gap-1 py-1 justify-end">
+                            <div className="flex items-center gap-1 py-1 justify-start">
                               {/* Undo / Redo — wired to audioStore. canUndo /
                                   canRedo come from the same store so the
                                   buttons grey out when their stack is empty. */}
