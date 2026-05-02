@@ -205,12 +205,17 @@ function composePlayBuffer(
       // fall through to global stretch on failure
     }
   }
-  // Global stretch (the original path) — only run WSOLA if the stretch
-  // is meaningful. Anything inside ±2% is imperceptible and not worth
-  // the spectral artefacts a time-stretch always introduces. Same
-  // bail-out at extreme ratios where WSOLA breaks down (use the source
-  // as-is plus playbackRate).
-  if (Math.abs(baseStretch - 1) < 0.02 || baseStretch < 0.4 || baseStretch > 2.5) {
+  // Skip WSOLA only when the stretch is imperceptible (±2 %). The
+  // previous extra-extreme bail-out (< 0.4 or > 2.5) was meant to
+  // dodge WSOLA artifacts at hard ratios, but a normal one-octave
+  // pitch (factor 0.5 / 2.0) combined with any non-1.0 warp factor
+  // would land below 0.4 and silently disable the time-stretch.
+  // Result: pitching -12 with warp on doubled the audible duration
+  // because only playbackRate dropped while the buffer stayed at
+  // its full length. WSOLA quality degrades but doesn't break at
+  // ±2-octave ratios, so trust it for the full range the user
+  // would actually dial in.
+  if (Math.abs(baseStretch - 1) < 0.02 || baseStretch < 0.1 || baseStretch > 10) {
     return { buffer: track.originalBuffer, playbackRate: pitchFactor };
   }
   try {
