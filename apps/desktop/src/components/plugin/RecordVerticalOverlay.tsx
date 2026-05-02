@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { getCtx, getMasterFader } from '../../stores/audio/graph';
+import { useAudioStore } from '../../stores/audioStore';
 
 // Vertical (9:16) composite recorder for TikTok / Reels / Shorts.
 //
@@ -525,27 +526,85 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
         drawCover(ctx2d, camV, 0, 0, OUTPUT_W, CAMERA_HEIGHT);
       }
       if (scrV && scrV.videoWidth > 0) {
-        // Top-aligned contain — the full shared window is visible
-        // (no cropping), sized to either full canvas width or full
-        // remaining height (whichever fits without overflow), and
-        // sits IMMEDIATELY below the camera region. Any leftover
-        // canvas room ends up as one bottom block instead of two
-        // letterbox strips above + below the screen, which makes
-        // a landscape capture read as big as possible inside the
-        // vertical 9:16 output.
+        // Two-band layout below the camera:
+        //   1) FULL landscape capture — shows the whole shared window,
+        //      sized to fit the canvas width without cropping.
+        //   2) PLAYHEAD ZOOM strip — fills the remaining space at the
+        //      bottom with a 2× zoom into a window of the timeline
+        //      that follows the playhead. Way more legible on a phone
+        //      than the full app at small scale.
         const sw = scrV.videoWidth;
         const sh = scrV.videoHeight;
         if (sw > 0 && sh > 0) {
+          // Band 1 — full landscape, top-aligned in the screen region.
           const scaleW = OUTPUT_W / sw;
           const scaleH = SCREEN_HEIGHT / sh;
           const scale = Math.min(scaleW, scaleH);
-          const drawW = sw * scale;
-          const drawH = sh * scale;
-          const drawX = (OUTPUT_W - drawW) / 2;     // centred horizontally
-          const drawY = SCREEN_TOP;                 // top-aligned in region
+          const fullW = sw * scale;
+          const fullH = sh * scale;
+          const fullX = (OUTPUT_W - fullW) / 2;
+          const fullY = SCREEN_TOP;
           try {
-            ctx2d.drawImage(scrV, 0, 0, sw, sh, drawX, drawY, drawW, drawH);
+            ctx2d.drawImage(scrV, 0, 0, sw, sh, fullX, fullY, fullW, fullH);
           } catch { /* video not ready */ }
+
+          // Band 2 — playhead-tracking zoom of the timeline area.
+          // Sits below the landscape band; height fills whatever
+          // canvas space is left.
+          const zoomTop = Math.round(fullY + fullH);
+          const zoomH = OUTPUT_H - zoomTop;
+          if (zoomH > 80) {
+            // Empirical fractions of where the timeline lives in the
+            // captured app. Sidebar ≈ 12 % left; header + collab ≈
+            // 18 % top; arrangement ends ≈ 78 % top (plugins below).
+            // Tuned for the standard Ghost Session web layout — small
+            // visible drift if the user has resized panels, but the
+            // zoom still reads OK because the crop is tall enough to
+            // catch waveforms / drum lanes / sequencer.
+            const TX_LO = 0.12;
+            const TX_HI = 1.00;
+            const TY_LO = 0.18;
+            const TY_HI = 0.78;
+            // Pick a source crop with the same aspect as the dest
+            // band so the zoom doesn't distort vertically.
+            const destAspect = OUTPUT_W / zoomH;
+            const cropH_frac = TY_HI - TY_LO;
+            const cropH_px = cropH_frac * sh;
+            // cropW chosen to match dest aspect.
+            const cropW_px = Math.min(cropH_px * destAspect, sw * (TX_HI - TX_LO));
+            // Where the playhead sits as a fraction of total
+            // arrangement duration. Uses .getState() on every frame
+            // — cheap; no React re-render is triggered.
+            const audio = useAudioStore.getState();
+            const dur = audio.duration > 0 ? audio.duration : 1;
+            const t = Math.max(0, Math.min(dur, audio.currentTime));
+            const progress = dur > 0 ? t / dur : 0;
+            // Slide the crop window across the timeline range. Clamp
+            // so the right edge of the crop never overruns the
+            // timeline area's right boundary.
+            const timelineLeftPx = TX_LO * sw;
+            const timelineRightPx = TX_HI * sw;
+            const maxStart = Math.max(timelineLeftPx, timelineRightPx - cropW_px);
+            const cropX_px = timelineLeftPx + (maxStart - timelineLeftPx) * progress;
+            const cropY_px = TY_LO * sh;
+            try {
+              ctx2d.drawImage(
+                scrV,
+                cropX_px, cropY_px, cropW_px, cropH_px,
+                0, zoomTop, OUTPUT_W, zoomH,
+              );
+            } catch { /* video not ready */ }
+            // Thin progress bar across the bottom of the zoom band so
+            // viewers immediately read it as "this is following the
+            // playhead". Drawn as a thin filled rect; current
+            // progress = filled portion in mint-green.
+            const barH = 4;
+            const barY = OUTPUT_H - barH - 2;
+            ctx2d.fillStyle = 'rgba(255,255,255,0.10)';
+            ctx2d.fillRect(0, barY, OUTPUT_W, barH);
+            ctx2d.fillStyle = '#00FFC8';
+            ctx2d.fillRect(0, barY, OUTPUT_W * progress, barH);
+          }
         }
       }
       // Watermark — drawn programmatically each frame as a dark pill
@@ -821,6 +880,42 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
             // it anywhere from there.
             style={{ top: 96, right: 24 }}
           >
+            {phase === 'recording' ? (
+              // Collapsed REC pill — during recording the full panel
+              // would dominate the captured frame, so shrink to a
+              // tiny pill the user can drag off to a corner. Same
+              // dragControls so the pill moves with the existing
+              // window position.
+              <div
+                onPointerDown={(e) => { if (e.button === 0) dragControls.start(e); }}
+                className="flex items-center gap-2 px-3 py-2 rounded-full select-none"
+                style={{
+                  background: 'rgba(15,12,32,0.95)',
+                  border: '1px solid rgba(239,68,68,0.55)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+                  cursor: 'grab',
+                  touchAction: 'none',
+                }}
+                title="Drag to move"
+              >
+                <motion.span
+                  className="w-2 h-2 rounded-full bg-red-500"
+                  animate={{ opacity: [1, 0.35, 1] }}
+                  transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+                />
+                <span className="text-[11px] font-bold text-white tabular-nums">REC {formatTime(elapsedMs)}</span>
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={stopRecording}
+                  className="ml-1 px-2.5 h-6 rounded-full text-[10.5px] font-bold text-white"
+                  style={{ background: '#ef4444' }}
+                  title="Stop recording"
+                >
+                  Stop
+                </button>
+              </div>
+            ) : (
             <div className="relative flex flex-col items-center">
               {/* Drag-handle bar — the only place that initiates a
                   drag gesture. Click-targets inside the frame stay
@@ -911,8 +1006,11 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
                   >
                     {/* Live screen-capture preview — visible from the
                         moment chooseWindow finishes through end of
-                        recording. */}
-                    {(phase === 'ready_to_record' || phase === 'recording' || phase === 'finalizing') && screenStreamRef.current && (
+                        recording. While recording, the panel is
+                        replaced by the REC pill (see top of render),
+                        so we only need ready_to_record + finalizing
+                        here. */}
+                    {(phase === 'ready_to_record' || phase === 'finalizing') && screenStreamRef.current && (
                       <video
                         autoPlay
                         muted
@@ -924,19 +1022,6 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
                         }}
                         className="absolute inset-0 w-full h-full object-cover bg-black"
                       />
-                    )}
-
-                    {phase === 'recording' && (
-                      <div className="absolute top-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2.5 py-1 rounded-full pointer-events-none"
-                        style={{ background: 'rgba(239,68,68,0.92)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}
-                      >
-                        <motion.span
-                          className="w-1.5 h-1.5 rounded-full bg-white"
-                          animate={{ opacity: [1, 0.35, 1] }}
-                          transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
-                        />
-                        <span className="text-[10px] font-bold text-white tabular-nums">REC {formatTime(elapsedMs)}</span>
-                      </div>
                     )}
 
                     {phase === 'requesting_screen' && (
@@ -1031,20 +1116,10 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
                       <span className="block w-12 h-12 rounded-full" style={{ background: '#ef4444' }} />
                     </button>
                   )}
-                  {phase === 'recording' && (
-                    <button
-                      type="button"
-                      onClick={stopRecording}
-                      className="w-16 h-16 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95"
-                      style={{
-                        background: 'rgba(255,255,255,0.95)',
-                        boxShadow: '0 6px 18px rgba(0,0,0,0.45), 0 0 0 4px rgba(239,68,68,0.35)',
-                      }}
-                      title="Stop"
-                    >
-                      <span className="block w-7 h-7 rounded-md" style={{ background: '#ef4444' }} />
-                    </button>
-                  )}
+                  {/* Stop button removed — the recording phase now
+                      collapses the entire panel into the REC pill at
+                      the top of the render, which has its own Stop
+                      button. */}
                   {resultUrl && phase === 'reviewing' && (
                     <>
                       <button
@@ -1174,6 +1249,7 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
                 )}
               </AnimatePresence>
             </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
