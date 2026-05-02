@@ -108,6 +108,40 @@ function drawStretch(
   } catch { /* video may not be ready yet */ }
 }
 
+// Contain-fit: scale the source to fit ENTIRELY inside dest while
+// preserving aspect — adds letterbox bars (top/bottom) or pillarbox
+// bars (left/right) when aspects differ, never crops the source.
+// Used for the screen-share region so the user sees the full
+// landscape capture inside the vertical 9:16 frame.
+function drawContain(
+  ctx: CanvasRenderingContext2D,
+  src: HTMLVideoElement,
+  dx: number, dy: number, dw: number, dh: number,
+): void {
+  const sw = src.videoWidth;
+  const sh = src.videoHeight;
+  if (!sw || !sh) return;
+  const sourceAspect = sw / sh;
+  const destAspect = dw / dh;
+  let drawW = dw;
+  let drawH = dh;
+  if (sourceAspect > destAspect) {
+    // Source wider than dest — letterbox (bars top + bottom). Width
+    // fills, height shrinks.
+    drawW = dw;
+    drawH = dw / sourceAspect;
+  } else {
+    // Source taller than dest — pillarbox (bars left + right).
+    drawH = dh;
+    drawW = dh * sourceAspect;
+  }
+  const drawX = dx + (dw - drawW) / 2;
+  const drawY = dy + (dh - drawH) / 2;
+  try {
+    ctx.drawImage(src, 0, 0, sw, sh, drawX, drawY, drawW, drawH);
+  } catch { /* video may not be ready yet */ }
+}
+
 // Draw the official Ghost Session mark — a 1:1 canvas port of the
 // SVG path used in WelcomeHero (the ghost on the home screen). The
 // stroke + eye fills use the brand gradient `#00FFC8 → #7C3AED`.
@@ -491,12 +525,12 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
         drawCover(ctx2d, camV, 0, 0, OUTPUT_W, CAMERA_HEIGHT);
       }
       if (scrV && scrV.videoWidth > 0) {
-        // Cover-fit preserves the captured window's aspect — content
-        // crops in from the sides if the window is wider than the
-        // 9:16 region, but never gets squished. Stretch-fit was
-        // tried and rejected: filling the region edge-to-edge isn't
-        // worth distorting the app UI.
-        drawCover(ctx2d, scrV, 0, SCREEN_TOP, OUTPUT_W, SCREEN_HEIGHT);
+        // Contain-fit so the ENTIRE shared window shows inside the
+        // bottom 72% — landscape captures get letterboxed (black
+        // bars top + bottom of the screen region) instead of being
+        // cropped. The user keeps the vertical 9:16 output for
+        // socials while the full app frame is visible.
+        drawContain(ctx2d, scrV, 0, SCREEN_TOP, OUTPUT_W, SCREEN_HEIGHT);
       }
       // Watermark — drawn programmatically each frame as a dark pill
       // containing the ghost mascot + "ghost session" wordmark, so the
