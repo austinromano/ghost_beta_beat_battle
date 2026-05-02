@@ -330,6 +330,14 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
   // Share menu visibility. Opened from the review-state Share
   // button. Hides when the user picks a destination or closes it.
   const [showShareMenu, setShowShareMenu] = useState(false);
+  // Camera selector — populated from navigator.mediaDevices once
+  // we've been granted permission. Persisted choice lets the user
+  // default to e.g. their iPhone (Continuity Camera on macOS, or a
+  // Camo / EpocCam virtual webcam on Windows) across sessions.
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(() => {
+    try { return localStorage.getItem('ghost_record_camera_id'); } catch { return null; }
+  });
 
   // Holds every track / node we create here so cleanup is deterministic.
   const cameraStreamRef = useRef<MediaStream | null>(null);
@@ -369,14 +377,7 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
 
     (async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            facingMode: 'user',
-          },
-          audio: false,
-        });
+        const stream = await acquireCameraStream(selectedCameraId);
         if (cancelled) {
           for (const t of stream.getTracks()) try { t.stop(); } catch { /* ignore */ }
           return;
@@ -390,6 +391,14 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
           previewVideoRef.current.srcObject = stream;
           previewVideoRef.current.play().catch(() => { /* autoplay-blocked is fine */ });
         }
+        // Refresh the device list now that permission is granted —
+        // before getUserMedia, enumerateDevices returns blank labels
+        // (privacy guard). Now we can show real names like
+        // "iPhone (Continuity Camera)".
+        try {
+          const list = await navigator.mediaDevices.enumerateDevices();
+          if (!cancelled) setCameras(list.filter((d) => d.kind === 'videoinput'));
+        } catch { /* ignore */ }
         setPhase('previewing');
       } catch (err: unknown) {
         if (cancelled) return;
@@ -405,6 +414,53 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Build the getUserMedia constraints for a specific camera. If the
+  // user has chosen a deviceId we lock to it; otherwise we hint
+  // facingMode 'user' so a laptop's built-in front camera is the
+  // default before they explicitly pick something else (e.g. their
+  // iPhone via Continuity Camera).
+  async function acquireCameraStream(deviceId: string | null): Promise<MediaStream> {
+    const video: MediaTrackConstraints = {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+    };
+    if (deviceId) {
+      video.deviceId = { exact: deviceId };
+    } else {
+      video.facingMode = 'user';
+    }
+    return navigator.mediaDevices.getUserMedia({ video, audio: false });
+  }
+
+  // Swap the camera stream live. Stops the current tracks, opens a
+  // new stream from the chosen device, and rewires every <video>
+  // that was reading from the old one. Persisted so the choice
+  // sticks across sessions.
+  async function switchCamera(deviceId: string) {
+    setSelectedCameraId(deviceId);
+    try { localStorage.setItem('ghost_record_camera_id', deviceId); } catch { /* ignore */ }
+    // Tear down the current stream so the OS hands the device back.
+    if (cameraStreamRef.current) {
+      for (const t of cameraStreamRef.current.getTracks()) try { t.stop(); } catch { /* ignore */ }
+      cameraStreamRef.current = null;
+    }
+    try {
+      const next = await acquireCameraStream(deviceId);
+      cameraStreamRef.current = next;
+      if (cameraVideoRef.current) {
+        cameraVideoRef.current.srcObject = next;
+        cameraVideoRef.current.play().catch(() => { /* ignore */ });
+      }
+      if (previewVideoRef.current) {
+        previewVideoRef.current.srcObject = next;
+        previewVideoRef.current.play().catch(() => { /* ignore */ });
+      }
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Camera switch failed';
+      setError(msg);
+    }
+  }
 
   function cleanupAll() {
     // Stop recorder if running.
@@ -986,6 +1042,36 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
                       className="absolute inset-0 w-full h-full object-cover"
                       style={{ transform: 'scaleX(-1)', background: '#0a0a0f' }}
                     />
+                  )}
+                  {/* Camera-source picker — appears once the OS has
+                      told us which video inputs exist. iPhone via
+                      Continuity Camera (macOS) or via Camo / EpocCam
+                      (Windows) lands in this list as soon as the
+                      phone is connected. Selection persists in
+                      localStorage. */}
+                  {!resultUrl && cameras.length > 1 && (
+                    <div
+                      className="absolute top-2 left-2 flex items-center gap-1 px-2 py-1 rounded-full"
+                      style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)' }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                        <circle cx="12" cy="13" r="4" />
+                      </svg>
+                      <select
+                        value={selectedCameraId ?? cameras[0]?.deviceId ?? ''}
+                        onChange={(e) => switchCamera(e.target.value)}
+                        className="bg-transparent text-white text-[10.5px] font-semibold outline-none cursor-pointer"
+                        style={{ maxWidth: 220 }}
+                        title="Camera source"
+                      >
+                        {cameras.map((d) => (
+                          <option key={d.deviceId} value={d.deviceId} className="text-black">
+                            {d.label || `Camera ${d.deviceId.slice(0, 6)}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   )}
                 </div>
 
