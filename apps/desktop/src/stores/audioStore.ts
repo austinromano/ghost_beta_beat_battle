@@ -805,6 +805,12 @@ export const useAudioStore = create<AudioState>((set, get) => {
             soloed: existing?.soloed ?? false, bpm: trackBpm || existing?.bpm || 0, pitch: existing?.pitch ?? 0,
             trimStart: existing?.trimStart ?? 0, trimEnd: existing?.trimEnd ?? 0,
             startOffset: existing?.startOffset ?? pending ?? 0,
+            // Pristine source — composePlayBuffer needs this to apply
+            // the saved pitch on reload. Without it, applyArrangementClips
+            // sets pitch + playbackRate but the buffer never gets
+            // pre-stretched, so a -12 clip plays 2× as long after a
+            // refresh.
+            originalBuffer: cachedBuf,
           });
           return { loadedTracks: m };
         });
@@ -827,6 +833,9 @@ export const useAudioStore = create<AudioState>((set, get) => {
             id: trackId, buffer, source: null, gainNode: null,
             volume: 1, muted: false, soloed: false, bpm: trackBpm, pitch: 0,
             trimStart: 0, trimEnd: 0, startOffset: pending ?? 0,
+            // See cached branch above — pristine source for the pitch
+            // / warp re-stretch path inside composePlayBuffer.
+            originalBuffer: buffer,
           });
           return { loadedTracks: m };
         });
