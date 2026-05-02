@@ -525,12 +525,28 @@ export default function RecordVerticalOverlay({ open, onClose }: Props) {
         drawCover(ctx2d, camV, 0, 0, OUTPUT_W, CAMERA_HEIGHT);
       }
       if (scrV && scrV.videoWidth > 0) {
-        // Contain-fit so the ENTIRE shared window shows inside the
-        // bottom 72% — landscape captures get letterboxed (black
-        // bars top + bottom of the screen region) instead of being
-        // cropped. The user keeps the vertical 9:16 output for
-        // socials while the full app frame is visible.
-        drawContain(ctx2d, scrV, 0, SCREEN_TOP, OUTPUT_W, SCREEN_HEIGHT);
+        // Top-aligned contain — the full shared window is visible
+        // (no cropping), sized to either full canvas width or full
+        // remaining height (whichever fits without overflow), and
+        // sits IMMEDIATELY below the camera region. Any leftover
+        // canvas room ends up as one bottom block instead of two
+        // letterbox strips above + below the screen, which makes
+        // a landscape capture read as big as possible inside the
+        // vertical 9:16 output.
+        const sw = scrV.videoWidth;
+        const sh = scrV.videoHeight;
+        if (sw > 0 && sh > 0) {
+          const scaleW = OUTPUT_W / sw;
+          const scaleH = SCREEN_HEIGHT / sh;
+          const scale = Math.min(scaleW, scaleH);
+          const drawW = sw * scale;
+          const drawH = sh * scale;
+          const drawX = (OUTPUT_W - drawW) / 2;     // centred horizontally
+          const drawY = SCREEN_TOP;                 // top-aligned in region
+          try {
+            ctx2d.drawImage(scrV, 0, 0, sw, sh, drawX, drawY, drawW, drawH);
+          } catch { /* video not ready */ }
+        }
       }
       // Watermark — drawn programmatically each frame as a dark pill
       // containing the ghost mascot + "ghost session" wordmark, so the
