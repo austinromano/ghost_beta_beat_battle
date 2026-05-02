@@ -134,6 +134,13 @@ export const EFFECT_DRAG_MIME = 'application/x-ghost-effect';
 export const DRUM_RACK_FX_KEY = '__drum_rack__';
 
 /**
+ * Sentinel key for the master-bus FX chain — sits between mixerBus
+ * and masterGain so every track + drum row routes through it. Same
+ * pattern as DRUM_RACK_FX_KEY, just a different splice point.
+ */
+export const MASTER_BUS_FX_KEY = '__master_bus__';
+
+/**
  * The arrangement groups clips by `fileId` (same source = same lane).
  * Effects are a property of the LANE, not an individual clip — this
  * helper picks the right key from a track-shaped object so every reader

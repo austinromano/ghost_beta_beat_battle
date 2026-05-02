@@ -426,6 +426,28 @@ export function wireDrumBusOutput(chain: { input: AudioNode; output: AudioNode }
   drumBus.connect(drumAnalyser);
 }
 
+/**
+ * Splice a master-bus FX chain between `mixerBus` and `masterGain`,
+ * so every track + drum row routes through it (same place a hardware
+ * mixer's master inserts would sit). Pass `null` to revert to the
+ * direct mixerBus → masterGain edge.
+ *
+ * Idempotent — safe to call repeatedly. Re-installs `mixerBus` ←
+ * (chain) → `masterGain` from scratch on every call so adding /
+ * removing / reordering effects doesn't compound stale edges.
+ */
+export function wireMasterBusOutput(chain: { input: AudioNode; output: AudioNode } | null): void {
+  if (!mixerBus || !masterGain) init();
+  if (!mixerBus || !masterGain) return;
+  try { mixerBus.disconnect(); } catch { /* ignore */ }
+  if (chain) {
+    mixerBus.connect(chain.input);
+    chain.output.connect(masterGain);
+  } else {
+    mixerBus.connect(masterGain);
+  }
+}
+
 export function getAnalyser(): AnalyserNode {
   // Force init so the master meter has something to tap even before the
   // first track loads — otherwise the meter mounts, sees `null`, bails

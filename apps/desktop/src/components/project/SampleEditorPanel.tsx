@@ -4,7 +4,7 @@ import { useProjectStore } from '../../stores/projectStore';
 import Waveform from '../tracks/Waveform';
 import { samplePreview } from '../../lib/samplePreview';
 import EffectChainEditor from './EffectChainEditor';
-import { DRUM_RACK_FX_KEY, laneKeyOf, useEffectsStore } from '../../stores/effectsStore';
+import { DRUM_RACK_FX_KEY, MASTER_BUS_FX_KEY, laneKeyOf, useEffectsStore } from '../../stores/effectsStore';
 
 // Bottom sample editor / clip inspector. Mounts at the bottom of the
 // arrangement view; shows when exactly one clip is selected. Big waveform,
@@ -73,6 +73,9 @@ export default function SampleEditorPanel({ projectId }: { projectId: string }) 
   // collapses to the empty state.
   if (selectedBusId === DRUM_RACK_FX_KEY) {
     return <DrumRackFxView />;
+  }
+  if (selectedBusId === 'master-bus') {
+    return <MasterBusFxView />;
   }
   if (selectedBusId) {
     return null;
@@ -270,6 +273,25 @@ function DrumRackFxView() {
       <EffectChainEditor
         laneKey={DRUM_RACK_FX_KEY}
         emptyMessage="Drag EQ or Comp from the sidebar to add group effects to the drum rack."
+      />
+    </div>
+  );
+}
+
+// Standalone view shown when the user clicks the master-bus lane.
+// Same shape as DrumRackFxView — EffectChainEditor renders the
+// chain bound to the MASTER_BUS_FX_KEY lane, which audioStore
+// splices between mixerBus and masterGain so every track + drum
+// row routes through it.
+function MasterBusFxView() {
+  return (
+    <div className="shrink-0 mt-2">
+      <div className="px-3 py-1 text-[10.5px] font-bold tracking-[0.15em] uppercase text-purple-300/80">
+        Master Bus FX
+      </div>
+      <EffectChainEditor
+        laneKey={MASTER_BUS_FX_KEY}
+        emptyMessage="Drag EQ, Comp, or Reverb from the sidebar to add effects across the full mix."
       />
     </div>
   );

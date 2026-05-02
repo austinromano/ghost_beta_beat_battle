@@ -7,7 +7,7 @@ import {
   ensureWarpedPlaybackWorklet, createWarpedPlaybackNode, ensureTrackCompressorWorklet,
   setBusEqBand, setBusCompParam, setBusReverbWet, setBusReverbDecay,
   getBusEqBand, getBusCompParam, getBusReverbWet, getBusReverbDecay,
-  getFxBusInput, wireDrumBusOutput,
+  getFxBusInput, wireDrumBusOutput, wireMasterBusOutput,
   type WarpedParams,
 } from './audio/graph';
 import { save as saveArrangement, load as loadArrangement } from './audio/arrangement';
@@ -16,7 +16,7 @@ import type { LoadedTrack, UndoSnapshot, WarpMarker, BusFxState } from './audio/
 import { buildTrackEqChain, removeTrackEq, disposeAllTrackEq } from './audio/trackEq';
 import { buildTrackCompChain, removeTrackComp, disposeAllTrackComp } from './audio/trackComp';
 import { buildTrackReverbChain, removeTrackReverb, disposeAllTrackReverb } from './audio/trackReverb';
-import { useEffectsStore, DRUM_RACK_FX_KEY, type EqParams, type CompParams, type ReverbParams } from './effectsStore';
+import { useEffectsStore, DRUM_RACK_FX_KEY, MASTER_BUS_FX_KEY, type EqParams, type CompParams, type ReverbParams } from './effectsStore';
 import { useProjectStore } from './projectStore';
 import { adaptiveStretch, type SampleCharacter } from '../lib/stretch';
 
@@ -1726,6 +1726,49 @@ function rebuildDrumBusFx() {
   } catch { /* audio not initialised yet — wireDrumBusOutput re-init is a no-op */ }
 }
 
+// Same shape as rebuildDrumBusFx but for the master bus. The chain
+// is spliced between mixerBus and masterGain so every track + drum
+// row routes through it (same place a hardware mixer's master
+// inserts would sit).
+function rebuildMasterBusFx() {
+  try {
+    const ctx = getCtx();
+    removeTrackEq(MASTER_BUS_FX_KEY);
+    removeTrackComp(MASTER_BUS_FX_KEY);
+    removeTrackReverb(MASTER_BUS_FX_KEY);
+    const chain = useEffectsStore.getState().getChain(MASTER_BUS_FX_KEY);
+    if (!chain || chain.length === 0) {
+      wireMasterBusOutput(null);
+      return;
+    }
+    let firstInput: AudioNode | null = null;
+    let cursor: AudioNode | null = null;
+    for (const fx of chain) {
+      try {
+        let stage: { input: AudioNode; output: AudioNode } | null = null;
+        if (fx.kind === 'eq' && fx.params && 'bands' in fx.params) {
+          stage = buildTrackEqChain(ctx, MASTER_BUS_FX_KEY, MASTER_BUS_FX_KEY, (fx.params as EqParams).bands as any, fx.bypassed);
+        } else if (fx.kind === 'comp' && fx.params && 'threshold' in fx.params) {
+          stage = buildTrackCompChain(ctx, MASTER_BUS_FX_KEY, MASTER_BUS_FX_KEY, fx.params as CompParams, fx.bypassed);
+        } else if (fx.kind === 'reverb' && fx.params && 'mix' in fx.params) {
+          stage = buildTrackReverbChain(ctx, MASTER_BUS_FX_KEY, MASTER_BUS_FX_KEY, fx.params as ReverbParams, fx.bypassed);
+        }
+        if (!stage) continue;
+        if (!firstInput) firstInput = stage.input;
+        if (cursor) cursor.connect(stage.input);
+        cursor = stage.output;
+      } catch (err) {
+        if (typeof console !== 'undefined') console.warn('[audioStore] master bus FX build failed for', fx.kind, err);
+      }
+    }
+    if (firstInput && cursor) {
+      wireMasterBusOutput({ input: firstInput, output: cursor });
+    } else {
+      wireMasterBusOutput(null);
+    }
+  } catch { /* audio not initialised yet */ }
+}
+
 // Hot-rewire on FX add / remove. effectsStore fires `ghost-fx-rewire`
 // whenever the chain shape changes — we seek to the current position
 // to force startAllSources to rebuild with the new chain. Sub-millisecond
@@ -1733,6 +1776,7 @@ function rebuildDrumBusFx() {
 if (typeof window !== 'undefined') {
   window.addEventListener('ghost-fx-rewire', () => {
     rebuildDrumBusFx();
+    rebuildMasterBusFx();
     const s = useAudioStore.getState();
     if (!s.isPlaying) return;
     s.seekTo(s.currentTime);
