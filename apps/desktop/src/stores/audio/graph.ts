@@ -427,16 +427,17 @@ export function wireDrumBusOutput(chain: { input: AudioNode; output: AudioNode }
 }
 
 /**
- * Splice a master-bus FX chain between `mixerBus` and `masterGain`,
- * so every track + drum row routes through it (same place a hardware
- * mixer's master inserts would sit). Pass `null` to revert to the
- * direct mixerBus → masterGain edge.
+ * Splice a master-FX chain between `mixerBus` and `masterGain`, so
+ * the entire mix (every track + drum row + return-bus output) flows
+ * through it before the master fader. Same place a hardware mixer's
+ * master inserts sit. Pass `null` to revert to the direct
+ * mixerBus → masterGain edge.
  *
  * Idempotent — safe to call repeatedly. Re-installs `mixerBus` ←
  * (chain) → `masterGain` from scratch on every call so adding /
  * removing / reordering effects doesn't compound stale edges.
  */
-export function wireMasterBusOutput(chain: { input: AudioNode; output: AudioNode } | null): void {
+export function wireMasterFx(chain: { input: AudioNode; output: AudioNode } | null): void {
   if (!mixerBus || !masterGain) init();
   if (!mixerBus || !masterGain) return;
   try { mixerBus.disconnect(); } catch { /* ignore */ }

@@ -7,7 +7,7 @@ import {
   ensureWarpedPlaybackWorklet, createWarpedPlaybackNode, ensureTrackCompressorWorklet,
   setBusEqBand, setBusCompParam, setBusReverbWet, setBusReverbDecay,
   getBusEqBand, getBusCompParam, getBusReverbWet, getBusReverbDecay,
-  getFxBusInput, wireDrumBusOutput, wireMasterBusOutput,
+  getFxBusInput, wireDrumBusOutput, wireMasterFx,
   type WarpedParams,
 } from './audio/graph';
 import { save as saveArrangement, load as loadArrangement } from './audio/arrangement';
@@ -16,7 +16,7 @@ import type { LoadedTrack, UndoSnapshot, WarpMarker, BusFxState } from './audio/
 import { buildTrackEqChain, removeTrackEq, disposeAllTrackEq } from './audio/trackEq';
 import { buildTrackCompChain, removeTrackComp, disposeAllTrackComp } from './audio/trackComp';
 import { buildTrackReverbChain, removeTrackReverb, disposeAllTrackReverb } from './audio/trackReverb';
-import { useEffectsStore, DRUM_RACK_FX_KEY, MASTER_BUS_FX_KEY, type EqParams, type CompParams, type ReverbParams } from './effectsStore';
+import { useEffectsStore, DRUM_RACK_FX_KEY, MASTER_FX_KEY, type EqParams, type CompParams, type ReverbParams } from './effectsStore';
 import { useProjectStore } from './projectStore';
 import { adaptiveStretch, type SampleCharacter } from '../lib/stretch';
 
@@ -1730,15 +1730,15 @@ function rebuildDrumBusFx() {
 // is spliced between mixerBus and masterGain so every track + drum
 // row routes through it (same place a hardware mixer's master
 // inserts would sit).
-function rebuildMasterBusFx() {
+function rebuildMasterFx() {
   try {
     const ctx = getCtx();
-    removeTrackEq(MASTER_BUS_FX_KEY);
-    removeTrackComp(MASTER_BUS_FX_KEY);
-    removeTrackReverb(MASTER_BUS_FX_KEY);
-    const chain = useEffectsStore.getState().getChain(MASTER_BUS_FX_KEY);
+    removeTrackEq(MASTER_FX_KEY);
+    removeTrackComp(MASTER_FX_KEY);
+    removeTrackReverb(MASTER_FX_KEY);
+    const chain = useEffectsStore.getState().getChain(MASTER_FX_KEY);
     if (!chain || chain.length === 0) {
-      wireMasterBusOutput(null);
+      wireMasterFx(null);
       return;
     }
     let firstInput: AudioNode | null = null;
@@ -1747,11 +1747,11 @@ function rebuildMasterBusFx() {
       try {
         let stage: { input: AudioNode; output: AudioNode } | null = null;
         if (fx.kind === 'eq' && fx.params && 'bands' in fx.params) {
-          stage = buildTrackEqChain(ctx, MASTER_BUS_FX_KEY, MASTER_BUS_FX_KEY, (fx.params as EqParams).bands as any, fx.bypassed);
+          stage = buildTrackEqChain(ctx, MASTER_FX_KEY, MASTER_FX_KEY, (fx.params as EqParams).bands as any, fx.bypassed);
         } else if (fx.kind === 'comp' && fx.params && 'threshold' in fx.params) {
-          stage = buildTrackCompChain(ctx, MASTER_BUS_FX_KEY, MASTER_BUS_FX_KEY, fx.params as CompParams, fx.bypassed);
+          stage = buildTrackCompChain(ctx, MASTER_FX_KEY, MASTER_FX_KEY, fx.params as CompParams, fx.bypassed);
         } else if (fx.kind === 'reverb' && fx.params && 'mix' in fx.params) {
-          stage = buildTrackReverbChain(ctx, MASTER_BUS_FX_KEY, MASTER_BUS_FX_KEY, fx.params as ReverbParams, fx.bypassed);
+          stage = buildTrackReverbChain(ctx, MASTER_FX_KEY, MASTER_FX_KEY, fx.params as ReverbParams, fx.bypassed);
         }
         if (!stage) continue;
         if (!firstInput) firstInput = stage.input;
@@ -1762,9 +1762,9 @@ function rebuildMasterBusFx() {
       }
     }
     if (firstInput && cursor) {
-      wireMasterBusOutput({ input: firstInput, output: cursor });
+      wireMasterFx({ input: firstInput, output: cursor });
     } else {
-      wireMasterBusOutput(null);
+      wireMasterFx(null);
     }
   } catch { /* audio not initialised yet */ }
 }
@@ -1776,7 +1776,7 @@ function rebuildMasterBusFx() {
 if (typeof window !== 'undefined') {
   window.addEventListener('ghost-fx-rewire', () => {
     rebuildDrumBusFx();
-    rebuildMasterBusFx();
+    rebuildMasterFx();
     const s = useAudioStore.getState();
     if (!s.isPlaying) return;
     s.seekTo(s.currentTime);

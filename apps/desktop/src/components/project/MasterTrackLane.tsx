@@ -1,17 +1,17 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getAnalyser } from '../../stores/audio/graph';
+import { useAudioStore } from '../../stores/audioStore';
+import { useEffectsStore, EFFECT_DRAG_MIME, MASTER_FX_KEY, type EffectKind } from '../../stores/effectsStore';
 import { TRACK_HEADER_WIDTH } from './ArrangementComponents';
 
 /**
- * Master track lane — looks exactly like a regular lane, no controls.
- * Header is the FL/editor TrackHeader treatment (solid block fill,
- * name, accent dot, inline level meter); the lane area is intentionally
- * empty. The level meter taps the master analyser so it reflects the
- * SUM of every track + drum row going through the master bus.
+ * Master track lane — the final output. Click the lane (or drag an
+ * effect chip onto it) to manage its insert chain; effects added
+ * here are spliced between `mixerBus` and `masterGain`, so the
+ * entire mix (every track + drum row + return-bus output) routes
+ * through them before the master fader.
  */
 export default function MasterTrackLane({ trackZoom = 'full' }: { trackZoom?: 'full' | 'half' }) {
-  // Same lane heights DraggableTrackList uses for regular lanes — keeps
-  // the master visually flush with the rest of the arrangement.
   const laneHeight = trackZoom === 'half' ? 50 : 72;
 
   // Gold hue family. Same hsl() construction as TrackHeader so the master
@@ -19,18 +19,76 @@ export default function MasterTrackLane({ trackZoom = 'full' }: { trackZoom?: 'f
   const fill = `hsl(50, 45%, 24%)`;
   const accent = `hsl(50, 88%, 60%)`;
 
+  const selectedBusId = useAudioStore((s) => s.selectedBusId);
+  const setSelectedBusId = useAudioStore((s) => s.setSelectedBusId);
+  const setSelectedTrackIds = useAudioStore((s) => s.setSelectedTrackIds);
+  const isSelected = selectedBusId === 'master';
+
+  const onClick = () => {
+    if (isSelected) {
+      setSelectedBusId(null);
+    } else {
+      setSelectedTrackIds([]);
+      setSelectedBusId('master');
+    }
+  };
+
+  // Effect-drop target — drag any chip from the sidebar's Effects
+  // section onto the lane and we append it to the master chain.
+  // The chain is spliced between mixerBus and masterGain by
+  // audioStore.rebuildMasterFx, so effects here process the mix.
+  const [fxDragOver, setFxDragOver] = useState(false);
+  const isEffectDrag = (dt: DataTransfer) => {
+    for (const t of Array.from(dt.types)) if (t === EFFECT_DRAG_MIME) return true;
+    return false;
+  };
+  const onFxDragOver = (e: React.DragEvent) => {
+    if (!isEffectDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!fxDragOver) setFxDragOver(true);
+  };
+  const onFxDragLeave = (e: React.DragEvent) => {
+    if (!isEffectDrag(e.dataTransfer)) return;
+    setFxDragOver(false);
+  };
+  const onFxDrop = (e: React.DragEvent) => {
+    if (!isEffectDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setFxDragOver(false);
+    try {
+      const raw = e.dataTransfer.getData(EFFECT_DRAG_MIME);
+      const payload = JSON.parse(raw) as { kind: EffectKind };
+      if (!payload?.kind) return;
+      useEffectsStore.getState().add(MASTER_FX_KEY, payload.kind);
+      // Auto-select master so the chain editor pops open with the
+      // just-added effect already visible.
+      setSelectedTrackIds([]);
+      setSelectedBusId('master');
+    } catch { /* malformed payload — ignore */ }
+  };
+
   return (
-    <div className="flex relative" style={{ height: laneHeight }}>
+    <div
+      className="flex relative"
+      style={{ height: laneHeight }}
+      onDragOver={onFxDragOver}
+      onDragLeave={onFxDragLeave}
+      onDrop={onFxDrop}
+    >
       <div
-        className="relative shrink-0 select-none flex items-center gap-1.5 px-2 rounded-l-md overflow-hidden"
+        onClick={onClick}
+        className="relative shrink-0 select-none flex items-center gap-1.5 px-2 rounded-l-md overflow-hidden cursor-pointer transition-colors"
         style={{
           width: TRACK_HEADER_WIDTH,
           height: '100%',
-          background: fill,
+          background: isSelected ? `hsl(50, 60%, 32%)` : fill,
           borderRight: `2px solid ${accent}`,
           boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -1px 0 rgba(0,0,0,0.25)',
         }}
-        title="Master output — sum of every track + drum row"
+        title={isSelected ? 'Click to deselect' : 'Click to edit master FX, or drag effects here from the sidebar'}
       >
         <span
           className="text-[11px] font-semibold text-white/95 truncate flex-1"
@@ -44,9 +102,19 @@ export default function MasterTrackLane({ trackZoom = 'full' }: { trackZoom?: 'f
         />
         <MasterLevelMeter />
       </div>
-      {/* Empty lane area — same background tone as regular lanes so the
-          master row blends into the arrangement. No clips, no controls. */}
-      <div className="flex-1 relative" style={{ background: 'rgba(10,4,18,0.4)' }} />
+      {/* Empty lane area — clickable + drag-target so effect drops
+          land anywhere on the lane, not just the header. */}
+      <div
+        onClick={onClick}
+        className="flex-1 relative cursor-pointer"
+        style={{
+          background: fxDragOver
+            ? 'rgba(255, 215, 0, 0.18)'
+            : isSelected ? 'rgba(255, 215, 0, 0.07)' : 'rgba(10,4,18,0.4)',
+          outline: fxDragOver ? '1.5px dashed rgba(255, 215, 0, 0.7)' : 'none',
+          outlineOffset: -2,
+        }}
+      />
     </div>
   );
 }
