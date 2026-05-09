@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useMemo } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
 import { useMidiTrack } from '../../stores/midiTrackStore';
-import { useArrangement } from './ArrangementComponents';
+import { useArrangement, TRACK_HEADER_WIDTH } from './ArrangementComponents';
 import { audioBufferCache, getAudioData } from '../../lib/audio';
 import { api } from '../../lib/api';
 import { getCtx } from '../../stores/audio/graph';
@@ -210,7 +210,11 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
         onDrop={onHeaderDrop}
         className="h-full flex flex-col justify-center px-2 shrink-0 cursor-grab active:cursor-grabbing relative rounded-l-lg"
         style={{
-          width: 144,
+          // Match the canonical track-header width so MIDI lanes
+          // align horizontally with audio + drum lanes — otherwise
+          // a MIDI clip at startSec=0 visually lands tens of pixels
+          // past the start of the arrangement.
+          width: TRACK_HEADER_WIDTH,
           background: 'rgba(124,58,237,0.18)',
           borderRight: '1px solid rgba(255,255,255,0.06)',
         }}
