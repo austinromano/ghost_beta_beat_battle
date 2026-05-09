@@ -145,7 +145,7 @@ type DragState =
   | { kind: 'resize'; noteId: string; originX: number; originDuration: number }
   | { kind: 'marquee'; startX: number; startY: number; baseSelection: Set<string>; additive: boolean };
 
-type Tool = 'draw' | 'select';
+type Tool = 'draw' | 'select' | null;
 
 interface ClipboardNote {
   pitch: number;
@@ -396,6 +396,13 @@ export default function PianoRollPanel({ projectId }: Props) {
     }
 
     // Empty grid — branch on tool.
+    if (tool === null) {
+      // No tool active → clicking empty space deselects so the user
+      // can clear a selection without painting or marquee-ing. Clicks
+      // on existing notes still flow through above (move/resize/etc).
+      if (!e.shiftKey) setSelectedIds(new Set());
+      return;
+    }
     if (tool === 'select') {
       // Start a marquee. Holding shift means "add to existing
       // selection"; otherwise the existing selection is dropped as
@@ -842,8 +849,8 @@ export default function PianoRollPanel({ projectId }: Props) {
               the FL Studio piano-roll tool palette. */}
           <div className="flex items-center bg-white/[0.04] border border-white/[0.08] rounded overflow-hidden">
             <button
-              onClick={() => setTool('draw')}
-              title="Draw tool — click to paint notes"
+              onClick={() => setTool((t) => (t === 'draw' ? null : 'draw'))}
+              title={tool === 'draw' ? 'Draw tool active — click again to disable' : 'Draw tool — click to paint notes'}
               className="px-1.5 py-0.5 flex items-center justify-center"
               style={{
                 background: tool === 'draw' ? 'rgba(168,85,247,0.35)' : 'transparent',
@@ -858,8 +865,8 @@ export default function PianoRollPanel({ projectId }: Props) {
               </svg>
             </button>
             <button
-              onClick={() => setTool('select')}
-              title="Select tool — drag to marquee-select notes"
+              onClick={() => setTool((t) => (t === 'select' ? null : 'select'))}
+              title={tool === 'select' ? 'Select tool active — click again to disable' : 'Select tool — drag to marquee-select notes'}
               className="px-1.5 py-0.5 flex items-center justify-center"
               style={{
                 background: tool === 'select' ? 'rgba(168,85,247,0.35)' : 'transparent',
@@ -970,7 +977,6 @@ export default function PianoRollPanel({ projectId }: Props) {
         <div
           ref={gridRef}
           className="flex-1 relative overflow-auto"
-          style={{ cursor: focused && tool === 'select' ? 'crosshair' : 'default' }}
           onScroll={onGridScroll}
           onMouseDown={onGridMouseDown}
           onMouseMove={onGridMouseMove}
