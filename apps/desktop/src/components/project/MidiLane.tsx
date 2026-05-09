@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useMemo } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
 import { useMidiTrack } from '../../stores/midiTrackStore';
-import { useArrangement, TRACK_HEADER_WIDTH } from './ArrangementComponents';
+import { useArrangement, TRACK_HEADER_WIDTH, HeaderEffectChips } from './ArrangementComponents';
 import { audioBufferCache, getAudioData } from '../../lib/audio';
 import { api } from '../../lib/api';
 import { getCtx } from '../../stores/audio/graph';
@@ -310,6 +310,13 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
               <path d="M3 12c1-3 2-3 3 0s2 3 3 0 2-3 3 0 2 3 3 0 2-3 3 0 2 3 3 0" />
             </svg>
           </button>
+        </div>
+        {/* Effect chips — one tiny tag per FX in the chain. Same
+            renderer as audio + drum lanes, keyed by the MIDI track
+            id. Drop an EQ / Comp / Reverb on the lane and a chip
+            shows up here within the same render. */}
+        <div className="mt-1 flex items-center">
+          <HeaderEffectChips laneKey={trackId} />
         </div>
       </div>
 

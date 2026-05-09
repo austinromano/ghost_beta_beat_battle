@@ -30,7 +30,7 @@ const LANE_HUE_PALETTE = [270, 165, 300, 220, 190, 330];
 // Bypassed effects render at 30 % opacity so the strip still answers
 // "what's on this track" at a glance. Reads the chain by laneKey so
 // every clip in the same lane sees the same chips.
-function HeaderEffectChips({ laneKey }: { laneKey: string }) {
+export function HeaderEffectChips({ laneKey }: { laneKey: string }) {
   // Subscribe to byProject so the chip strip re-renders on add / remove /
   // bypass-toggle / reorder. getChain reads off currentProjectId inside
   // the store closure.
