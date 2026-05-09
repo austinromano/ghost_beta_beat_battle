@@ -78,6 +78,12 @@ interface MidiTrackState {
   // sampler panel. Null = no sampler panel open. Click a MIDI track's
   // instrument badge in the arrangement to set this.
   samplerOpenTrackId: string | null;
+  // Top-left position of the floating Sampler panel in viewport
+  // coordinates. Null = use the default (bottom-right anchor) so the
+  // panel always pops up somewhere visible on a fresh project before
+  // the user has dragged it. Once moved, this is persisted in
+  // localStorage and restored on next load.
+  samplerPosition: { x: number; y: number } | null;
 
   // Per-track instrument (keyed by the project-store track id).
   instruments: Record<string, MidiInstrument>;
@@ -90,6 +96,7 @@ interface MidiTrackState {
   setOpen: (v: boolean) => void;
   setPanelHeight: (px: number) => void;
   openSampler: (trackId: string | null) => void;
+  setSamplerPosition: (pos: { x: number; y: number } | null) => void;
 
   // Instrument config
   ensureInstrument: (trackId: string) => void;
@@ -244,6 +251,7 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
   open: false,
   panelHeight: 320,
   samplerOpenTrackId: null,
+  samplerPosition: null,
 
   instruments: {},
   clips: [],
@@ -252,6 +260,7 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
   setOpen: (v) => set({ open: v }),
   setPanelHeight: (px) => set({ panelHeight: Math.max(160, Math.min(720, px)) }),
   openSampler: (trackId) => set({ samplerOpenTrackId: trackId }),
+  setSamplerPosition: (pos) => set({ samplerPosition: pos }),
 
   ensureInstrument: (trackId) => set((s) => {
     if (s.instruments[trackId]) return s;
@@ -647,6 +656,7 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
           selectedClipId: string | null;
           open?: boolean;
           panelHeight?: number;
+          samplerPosition?: { x: number; y: number } | null;
         };
         const instruments: Record<string, MidiInstrument> = {};
         for (const [tid, i] of Object.entries(data.instruments || {})) {
@@ -660,6 +670,7 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
           selectedClipId: data.selectedClipId ?? null,
           open: data.open ?? false,
           panelHeight: data.panelHeight ?? 320,
+          samplerPosition: data.samplerPosition ?? null,
         });
       } else {
         set({
@@ -810,6 +821,7 @@ useMidiTrack.subscribe((state) => {
     const persisted = {
       ...payload,
       selectedClipId: state.selectedClipId,
+      samplerPosition: state.samplerPosition,
       open: state.open,
       panelHeight: state.panelHeight,
     };

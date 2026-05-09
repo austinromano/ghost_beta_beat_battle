@@ -48,6 +48,8 @@ const KEYBOARD_HIGH = 84; // C6
 export default function Sampler({ projectId }: Props) {
   const samplerOpenTrackId = useMidiTrack((s) => s.samplerOpenTrackId);
   const openSampler = useMidiTrack((s) => s.openSampler);
+  const samplerPosition = useMidiTrack((s) => s.samplerPosition);
+  const setSamplerPosition = useMidiTrack((s) => s.setSamplerPosition);
   const instruments = useMidiTrack((s) => s.instruments);
   const ensureInstrument = useMidiTrack((s) => s.ensureInstrument);
   const setInstrument = useMidiTrack((s) => s.setInstrument);
@@ -66,12 +68,57 @@ export default function Sampler({ projectId }: Props) {
   const trackId = samplerOpenTrackId;
   const inst = instruments[trackId];
 
+  // Default position when the user has never dragged the panel:
+  // bottom-right of the viewport with a 16 px margin. Once they
+  // move it, samplerPosition is set and we honour it instead.
+  const left = samplerPosition
+    ? samplerPosition.x
+    : Math.max(16, window.innerWidth - PANEL_WIDTH - 16);
+  const top = samplerPosition
+    ? samplerPosition.y
+    : Math.max(16, window.innerHeight - PANEL_HEIGHT - 16);
+
+  // Header pointer-down → start a drag. We track the offset from
+  // the panel's top-left to the click point so the drag feels
+  // anchored at the click position instead of teleporting the
+  // panel under the cursor on first move.
+  const onHeaderPointerDown = (e: React.PointerEvent) => {
+    // Buttons inside the header (close ✕) shouldn't start a drag.
+    if ((e.target as HTMLElement).closest('button')) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
+    const startLeft = left;
+    const startTop = top;
+    const onMove = (mv: PointerEvent) => {
+      const nextX = startLeft + (mv.clientX - startClientX);
+      const nextY = startTop + (mv.clientY - startClientY);
+      // Clamp so a corner of the panel is always reachable for
+      // re-grabbing — keep at least 32 px of header on screen.
+      const minX = -PANEL_WIDTH + 32;
+      const maxX = window.innerWidth - 32;
+      const minY = 0;
+      const maxY = window.innerHeight - 32;
+      setSamplerPosition({
+        x: Math.max(minX, Math.min(maxX, nextX)),
+        y: Math.max(minY, Math.min(maxY, nextY)),
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   return (
     <div
-      className="absolute z-40 flex flex-col rounded-md overflow-hidden select-none"
+      className="fixed z-40 flex flex-col rounded-md overflow-hidden select-none"
       style={{
-        bottom: 16,
-        right: 16,
+        left,
+        top,
         width: PANEL_WIDTH,
         height: PANEL_HEIGHT,
         background: COLOR_BG,
@@ -83,6 +130,7 @@ export default function Sampler({ projectId }: Props) {
         trackName={trackName}
         instrumentName={inst?.fileId ? inst.name : 'Empty'}
         onClose={() => openSampler(null)}
+        onPointerDown={onHeaderPointerDown}
       />
       <SamplerBody
         projectId={projectId}
@@ -99,11 +147,18 @@ export default function Sampler({ projectId }: Props) {
   );
 }
 
-function SamplerHeader({ trackName, instrumentName, onClose }: { trackName: string | null; instrumentName: string; onClose: () => void }) {
+function SamplerHeader({ trackName, instrumentName, onClose, onPointerDown }: {
+  trackName: string | null;
+  instrumentName: string;
+  onClose: () => void;
+  onPointerDown: (e: React.PointerEvent) => void;
+}) {
   return (
     <div
-      className="shrink-0 flex items-center px-3"
+      onPointerDown={onPointerDown}
+      className="shrink-0 flex items-center px-3 cursor-grab active:cursor-grabbing"
       style={{ height: HEADER_H, background: COLOR_PANEL_HEADER, borderBottom: `1px solid ${COLOR_DIVIDER}` }}
+      title="Drag to move the Sampler panel"
     >
       <span className="text-[12px] font-semibold text-white/85">Sampler</span>
       {trackName && (
