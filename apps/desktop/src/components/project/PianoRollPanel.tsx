@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useMidiTrack } from '../../stores/midiTrackStore';
 import { useAudioStore } from '../../stores/audioStore';
+import { useProjectStore } from '../../stores/projectStore';
 import { audioBufferCache, getAudioData } from '../../lib/audio';
 import { api } from '../../lib/api';
 import { getCtx } from '../../stores/audio/graph';
@@ -28,9 +29,17 @@ import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
 // to the bottom regardless of pitch scroll.
 
 /**
- * Floating toggle button that opens the piano roll panel. Renders
- * only while the panel is closed so the two pieces don't visually
- * fight — the panel itself owns the ✕ to close.
+ * Floating buttons for the bottom-right of the arrangement column:
+ *   - "+ MIDI Track" creates a new MIDI track on the current project
+ *     and refreshes so it shows up as a lane immediately.
+ *   - "Piano Roll" opens the editor panel for whatever clip is
+ *     currently selected (renders only while the panel is closed —
+ *     the panel itself owns the ✕ to close).
+ *
+ * Phase 5 will replace the standalone Piano Roll button with the
+ * "click any MIDI clip in the arrangement" entrypoint as the
+ * primary path; this button stays as a fallback for power users
+ * who want to switch between clips without going through the lane.
  */
 export function PianoRollOpenButton() {
   const open = useMidiTrack((s) => s.open);
@@ -41,7 +50,7 @@ export function PianoRollOpenButton() {
       onClick={() => setOpen(true)}
       className="absolute bottom-3 right-3 z-30 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium text-white shadow-lg transition-all hover:scale-[1.02]"
       style={{ background: 'linear-gradient(180deg, #9333EA 0%, #6B21A8 100%)', boxShadow: '0 4px 12px rgba(147,51,234,0.4)' }}
-      title="Open piano roll"
+      title="Open piano roll for the selected clip"
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="2" y="6" width="20" height="12" rx="1" />
@@ -55,8 +64,48 @@ export function PianoRollOpenButton() {
   );
 }
 
-const DEFAULT_TRACK_ID = 'midi-track-1';
-const DEFAULT_CLIP_LENGTH_BARS = 4;
+/**
+ * Adds a MIDI track to the current project. Sits to the LEFT of the
+ * Piano Roll button so the two are visually grouped. Once clicked
+ * the new lane appears in the arrangement; the user clicks empty
+ * lane space to start a clip.
+ */
+export function AddMidiTrackButton({ projectId }: { projectId: string }) {
+  const open = useMidiTrack((s) => s.open);
+  const ensureInstrument = useMidiTrack((s) => s.ensureInstrument);
+  // We hide the button while the panel is open — the panel covers
+  // most of the bottom-right area anyway, and adding new tracks
+  // mid-edit would require closing the piano roll first to see them.
+  if (open) return null;
+
+  const onClick = async () => {
+    if (!projectId) return;
+    try {
+      const result: any = await api.addTrack(projectId, { name: 'MIDI', type: 'midi' as any } as any);
+      // Pre-create the instrument record so the lane can immediately
+      // accept a sample drop without an extra ensureInstrument round
+      // trip. The MIDI store is keyed by the project track id.
+      if (result?.id) ensureInstrument(result.id);
+      window.dispatchEvent(new CustomEvent('ghost-refresh-project'));
+    } catch { /* server error — user can retry */ }
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      className="absolute bottom-3 right-[148px] z-30 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium text-white shadow-lg transition-all hover:scale-[1.02]"
+      style={{ background: 'linear-gradient(180deg, #4F46E5 0%, #3730A3 100%)', boxShadow: '0 4px 12px rgba(79,70,229,0.4)' }}
+      title="Add a MIDI track to the arrangement"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+      MIDI
+    </button>
+  );
+}
+
 const PITCH_HEIGHT = 14;
 const KEYBOARD_WIDTH = 60;
 const HEADER_HEIGHT = 36;
@@ -104,10 +153,8 @@ export default function PianoRollPanel({ projectId }: Props) {
   const instruments = useMidiTrack((s) => s.instruments);
   const clips = useMidiTrack((s) => s.clips);
   const selectedClipId = useMidiTrack((s) => s.selectedClipId);
-  const ensureInstrument = useMidiTrack((s) => s.ensureInstrument);
   const setInstrument = useMidiTrack((s) => s.setInstrument);
   const setBaseNote = useMidiTrack((s) => s.setBaseNote);
-  const createClipAt = useMidiTrack((s) => s.createClipAt);
   const selectClip = useMidiTrack((s) => s.selectClip);
   const addNote = useMidiTrack((s) => s.addNote);
   const deleteNotes = useMidiTrack((s) => s.deleteNotes);
@@ -137,19 +184,17 @@ export default function PianoRollPanel({ projectId }: Props) {
     return () => { stopScheduler(); };
   }, [isPlaying, projectId, startScheduler, stopScheduler]);
 
-  // --- Default track + clip ----------------------------------------
+  // --- On open, fall back to the first existing clip --------------
+  // Real MIDI tracks live in the project's track table now, and clips
+  // are created via the lane (click empty space → new clip). When the
+  // user opens the piano roll directly via the button without a clip
+  // selected, jump them to whatever clip exists so they don't see an
+  // empty editor; if the project has no MIDI clips at all, the panel
+  // shows an empty-state message and the user adds a track first.
   useEffect(() => {
     if (!open) return;
-    ensureInstrument(DEFAULT_TRACK_ID);
-    const existing = clips.find((c) => c.trackId === DEFAULT_TRACK_ID);
-    if (!existing) {
-      const barSec = 240 / projectBpm;
-      const lengthSec = DEFAULT_CLIP_LENGTH_BARS * barSec;
-      const id = createClipAt(DEFAULT_TRACK_ID, 0, lengthSec);
-      selectClip(id);
-    } else if (!selectedClipId) {
-      selectClip(existing.id);
-    }
+    if (selectedClipId) return;
+    if (clips.length > 0) selectClip(clips[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -158,6 +203,14 @@ export default function PianoRollPanel({ projectId }: Props) {
     [clips, selectedClipId],
   );
   const instrument = selectedClip ? instruments[selectedClip.trackId] : undefined;
+  // Pull the project track's display name so the header reads "Piano
+  // Roll · <track name> · <sample>" — the user can tell at a glance
+  // which MIDI track they're editing when there are several.
+  const trackName = useProjectStore((s) => {
+    if (!selectedClip) return null;
+    const tr = s.currentProject?.tracks?.find((t: any) => t.id === selectedClip.trackId);
+    return tr?.name ?? null;
+  });
 
   // --- Geometry ----------------------------------------------------
   const lowPitch = 24;   // C1
@@ -459,9 +512,15 @@ export default function PianoRollPanel({ projectId }: Props) {
         onDrop={onHeaderDrop}
       >
         <span className="text-[12px] font-semibold text-white/85">Piano Roll</span>
+        {trackName && (
+          <>
+            <span className="text-white/30">·</span>
+            <span className="text-[11px] text-white/80">{trackName}</span>
+          </>
+        )}
         <span className="text-white/30">·</span>
         <span className="text-[11px] text-white/65">
-          {instrument?.fileId ? instrument.name : 'Drop a sample here →'}
+          {instrument?.fileId ? instrument.name : selectedClip ? 'Drop a sample here →' : 'No clip selected'}
         </span>
         {instrument?.fileId && selectedClip && (
           <>

@@ -9,6 +9,7 @@ import { getSocket } from '../../lib/socket';
 import Waveform from '../tracks/Waveform';
 import Avatar from '../common/Avatar';
 import { useDrumRack, getRowAnalyser } from '../../stores/drumRackStore';
+import MidiLane from './MidiLane';
 import { getDrumAnalyser } from '../../stores/audio/graph';
 import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
 import { useEffectsStore, EFFECT_DRAG_MIME, EFFECT_HUE, DRUM_RACK_FX_KEY, laneKeyOf, type EffectKind } from '../../stores/effectsStore';
@@ -2012,6 +2013,21 @@ export function DraggableTrackList({ tracks, selectedProjectId, deleteTrack, upd
           }
           const laneTracks = lanes.get(laneKey);
           if (!laneTracks) return null;
+          // MIDI tracks render their own lane component — they don't
+          // share the audio LaneRow geometry because they have a
+          // different header (sample drop + instrument readout) and
+          // their clips live in the midiTrackStore, not loadedTracks.
+          if (laneTracks[0]?.type === 'midi') {
+            return (
+              <MidiLane
+                key={laneKey}
+                laneKey={laneKey}
+                track={laneTracks[0]}
+                laneHeight={laneHeight}
+                projectId={selectedProjectId}
+              />
+            );
+          }
           return (
             <LaneRow
               key={laneKey}
