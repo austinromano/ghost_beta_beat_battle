@@ -78,6 +78,14 @@ export default function SampleEditorPanel({ projectId }: { projectId: string }) 
     return <MasterFxView />;
   }
   if (selectedBusId) {
+    // Could be a MIDI track id — render a MIDI-track-specific FX
+    // editor when the bus id matches a project track of type='midi'.
+    // Any other bus id (legacy / unknown) collapses to the empty
+    // state below.
+    const midiTrack = currentProject?.tracks?.find((t: any) => t.id === selectedBusId && t.type === 'midi');
+    if (midiTrack) {
+      return <MidiTrackFxView trackName={midiTrack.name || 'MIDI'} laneKey={selectedBusId} />;
+    }
     return null;
   }
 
@@ -273,6 +281,26 @@ function DrumRackFxView() {
       <EffectChainEditor
         laneKey={DRUM_RACK_FX_KEY}
         emptyMessage="Drag EQ or Comp from the sidebar to add group effects to the drum rack."
+      />
+    </div>
+  );
+}
+
+// Standalone view shown when the user clicks a MIDI track header.
+// Same shape as DrumRackFxView but the lane key is the MIDI track's
+// project id, so the chain stored under that id is what midiFxBus
+// routes notes through. The label uses the track's display name so
+// the user can tell at a glance which MIDI track they're editing
+// when there are several.
+function MidiTrackFxView({ trackName, laneKey }: { trackName: string; laneKey: string }) {
+  return (
+    <div className="shrink-0 mt-2">
+      <div className="px-3 py-1 text-[10.5px] font-bold tracking-[0.15em] uppercase text-purple-300/80">
+        {trackName} FX
+      </div>
+      <EffectChainEditor
+        laneKey={laneKey}
+        emptyMessage="Drag EQ, Comp, or Reverb from the sidebar to add effects to this MIDI track."
       />
     </div>
   );

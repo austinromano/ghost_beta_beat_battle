@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useMemo } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
 import { useMidiTrack } from '../../stores/midiTrackStore';
+import { useAudioStore } from '../../stores/audioStore';
 import { useArrangement, TRACK_HEADER_WIDTH, HeaderEffectChips } from './ArrangementComponents';
 import { audioBufferCache, getAudioData } from '../../lib/audio';
 import { api } from '../../lib/api';
@@ -48,6 +49,8 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
   const deleteClip = useMidiTrack((s) => s.deleteClip);
   const selectClip = useMidiTrack((s) => s.selectClip);
   const openSampler = useMidiTrack((s) => s.openSampler);
+  const setSelectedBusId = useAudioStore((s) => s.setSelectedBusId);
+  const setSelectedTrackIds = useAudioStore((s) => s.setSelectedTrackIds);
 
   const { bpm, arrangementDur } = useArrangement();
   const barSec = 240 / Math.max(1, bpm);
@@ -206,6 +209,11 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
       const payload = JSON.parse(raw) as { kind: EffectKind };
       if (!payload?.kind) return;
       useEffectsStore.getState().add(trackId, payload.kind);
+      // Pop the FX editor for this track so the user can see + tweak
+      // the new effect immediately. Same UX as selecting the track
+      // header by click.
+      setSelectedTrackIds([]);
+      setSelectedBusId(trackId);
     } catch { /* malformed — ignore */ }
   };
 
@@ -261,7 +269,9 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
     >
       {/* Track header — narrower than the audio header since MIDI
           tracks don't have warp/pitch/trim controls. Drop a sample
-          on this strip to set the instrument. */}
+          on this strip to set the instrument. Click selects the
+          track as the FX-edit context so SampleEditorPanel pops the
+          chain editor for this track's effect chain. */}
       <div
         data-track-header
         onPointerDown={(e) => {
@@ -269,6 +279,14 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
           if ((e.target as HTMLElement).closest('button')) return;
           e.preventDefault();
           dragControls.start(e);
+        }}
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest('button')) return;
+          // Mirror the drum-rack pattern: clear any track selection
+          // and stash the trackId on selectedBusId so SampleEditor
+          // Panel routes to MidiTrackFxView for this track.
+          setSelectedTrackIds([]);
+          setSelectedBusId(trackId);
         }}
         onDragOver={onHeaderDragOver}
         onDrop={onHeaderDrop}
