@@ -1263,6 +1263,32 @@ function DrumRackLanes({ laneHeight }: { laneHeight: number }) {
     setSelectedBusId(DRUM_RACK_FX_KEY);
   };
 
+  // Right-click → delete-rack context menu. Anchor stored as screen
+  // coords; window-level mousedown / Escape dismiss it. The drum rack
+  // is a per-project singleton, so "delete" here clears every clip
+  // off the arrangement instead of removing a track row from the
+  // project.tracks table — that lets the user wipe the rack without
+  // also losing the configured row kit.
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!headerMenu) return;
+    const onDown = () => setHeaderMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setHeaderMenu(null); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [headerMenu]);
+
+  const clipCount = clips.length;
+  const clearDrumRack = () => {
+    if (clipCount === 0) return;
+    if (!window.confirm(`Clear all ${clipCount} drum clip${clipCount === 1 ? '' : 's'} from the arrangement?`)) return;
+    useDrumRack.setState({ clips: [], selectedClipId: null });
+  };
+
   return (
     <Reorder.Item
       value={DRUM_RACK_LANE_KEY}
@@ -1289,6 +1315,11 @@ function DrumRackLanes({ laneHeight }: { laneHeight: number }) {
             dragControls.start(e);
           }}
           onClick={selectDrumRackForFx}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setHeaderMenu({ x: e.clientX, y: e.clientY });
+          }}
           className="h-full flex shrink-0 relative cursor-grab active:cursor-grabbing"
         >
           <TrackHeader name="Drum Rack" hue={hue} trackIds={[]} laneKey={DRUM_RACK_FX_KEY} meter={<DrumRackLevelMeter />} />
@@ -1382,6 +1413,29 @@ function DrumRackLanes({ laneHeight }: { laneHeight: number }) {
           subLaneHeight={tallRows ? laneHeight : 24}
         />
       ))}
+      {headerMenu && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="fixed z-[60] min-w-[160px] rounded-md py-1 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur-md"
+          style={{
+            left: headerMenu.x, top: headerMenu.y,
+            background: 'rgba(20, 12, 30, 0.96)',
+            border: '1px solid rgba(255,255,255,0.08)',
+          }}
+        >
+          <button
+            onClick={() => { setHeaderMenu(null); clearDrumRack(); }}
+            disabled={clipCount === 0}
+            className="w-full px-3 py-1.5 text-[13px] text-left text-ghost-error-red hover:bg-ghost-error-red/10 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+            {clipCount === 0 ? 'No drum clips to clear' : `Delete drum rack (${clipCount} clip${clipCount === 1 ? '' : 's'})`}
+          </button>
+        </div>
+      )}
     </Reorder.Item>
   );
 }

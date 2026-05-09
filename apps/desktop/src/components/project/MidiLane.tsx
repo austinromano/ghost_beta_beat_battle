@@ -1,7 +1,8 @@
-import { useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Reorder, useDragControls } from 'framer-motion';
 import { useMidiTrack } from '../../stores/midiTrackStore';
 import { useAudioStore } from '../../stores/audioStore';
+import { useProjectStore } from '../../stores/projectStore';
 import { useArrangement, TRACK_HEADER_WIDTH, HeaderEffectChips } from './ArrangementComponents';
 import { audioBufferCache, getAudioData } from '../../lib/audio';
 import { api } from '../../lib/api';
@@ -250,6 +251,49 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
     } catch { /* malformed drag — ignore */ }
   };
 
+  // ---- Right-click → delete-track context menu ---------------------
+  // Mirrors the audio-lane menu in ArrangementComponents.tsx. State is
+  // an absolute screen-coord anchor so the menu floats over whatever
+  // DOM is below; window-level mousedown / Escape dismiss it.
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!headerMenu) return;
+    const onDown = () => setHeaderMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setHeaderMenu(null); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [headerMenu]);
+
+  const deleteMidiTrack = async () => {
+    if (!window.confirm(`Delete the MIDI track "${track.name || 'MIDI'}"? This removes the track and every clip on it.`)) return;
+    // Tear down MIDI-store state for this track BEFORE the project
+    // refresh — clips and instrument are keyed by trackId, and once
+    // the server-side track row is gone there's nothing to anchor
+    // them to. The persist subscription on midiTrackStore broadcasts
+    // the cleared payload to peers so they drop the same state.
+    useMidiTrack.setState((s) => {
+      const { [trackId]: _gone, ...remainingInstruments } = s.instruments;
+      return {
+        instruments: remainingInstruments,
+        clips: s.clips.filter((c) => c.trackId !== trackId),
+        selectedClipId: s.clips.find((c) => c.id === s.selectedClipId && c.trackId === trackId)
+          ? null
+          : s.selectedClipId,
+      };
+    });
+    // Drop any audio-store wiring for this track (FX chain, etc.) so
+    // a re-add of a same-id track doesn't inherit stale connections.
+    useAudioStore.getState().removeTrack(trackId);
+    try {
+      await useProjectStore.getState().deleteTrack(projectId, trackId);
+    } catch { /* server error — UI already cleared, refresh will reconcile */ }
+    window.dispatchEvent(new CustomEvent('ghost-refresh-project'));
+  };
+
   if (arrangementDur <= 0) return null;
 
   return (
@@ -287,6 +331,11 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
           // Panel routes to MidiTrackFxView for this track.
           setSelectedTrackIds([]);
           setSelectedBusId(trackId);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setHeaderMenu({ x: e.clientX, y: e.clientY });
         }}
         onDragOver={onHeaderDragOver}
         onDrop={onHeaderDrop}
@@ -401,6 +450,28 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
           />
         ))}
       </div>
+      {headerMenu && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="fixed z-[60] min-w-[160px] rounded-md py-1 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur-md"
+          style={{
+            left: headerMenu.x, top: headerMenu.y,
+            background: 'rgba(20, 12, 30, 0.96)',
+            border: '1px solid rgba(255,255,255,0.08)',
+          }}
+        >
+          <button
+            onClick={() => { setHeaderMenu(null); deleteMidiTrack(); }}
+            className="w-full px-3 py-1.5 text-[13px] text-left text-ghost-error-red hover:bg-ghost-error-red/10 transition-colors flex items-center gap-2"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+            Delete MIDI track
+          </button>
+        </div>
+      )}
     </Reorder.Item>
   );
 }
