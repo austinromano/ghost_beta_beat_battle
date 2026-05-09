@@ -36,7 +36,7 @@ function pitchToLabel(pitch: number): string | null {
   return `C${octave}`;
 }
 
-function previewKey(pitch: number, buffer: AudioBuffer | undefined, baseNote: number, volume: number, trackId: string | undefined) {
+export function previewKey(pitch: number, buffer: AudioBuffer | undefined, baseNote: number, volume: number, trackId: string | undefined) {
   if (!buffer) return;
   const ctx = getCtx();
   const src = ctx.createBufferSource();

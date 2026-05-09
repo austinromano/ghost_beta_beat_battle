@@ -6,7 +6,7 @@ import { audioBufferCache, getAudioData } from '../../lib/audio';
 import { api } from '../../lib/api';
 import { getCtx } from '../../stores/audio/graph';
 import { sendSessionAction } from '../../lib/socket';
-import PianoRollKeyboard from './PianoRollKeyboard';
+import PianoRollKeyboard, { previewKey } from './PianoRollKeyboard';
 import PianoRollNote from './PianoRollNote';
 import VelocityLane from './VelocityLane';
 import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
@@ -239,6 +239,7 @@ export default function PianoRollPanel({ projectId }: Props) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [snapDiv, setSnapDiv] = useState(16);
   const [tool, setTool] = useState<Tool>('draw');
+  const [audition, setAudition] = useState(true);
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   // Focus scoping — keyboard shortcuts (Delete / Ctrl+C/V/X/A) and the
   // select-tool crosshair cursor should only fire when the user has
@@ -347,6 +348,12 @@ export default function PianoRollPanel({ projectId }: Props) {
       }
       setSelectedIds(nextSel);
 
+      // Audition — fire the sample at this note's pitch through the
+      // track FX bus. Same one-shot path the keyboard column uses.
+      if (audition && instrument?.buffer) {
+        previewKey(note.pitch, instrument.buffer, instrument.baseNote, instrument.volume * note.velocity, selectedClip.trackId);
+      }
+
       const originStarts = new Map<string, number>();
       const originPitches = new Map<string, number>();
       for (const id of nextSel) {
@@ -396,7 +403,12 @@ export default function PianoRollPanel({ projectId }: Props) {
     });
     setSelectedIds(new Set([newId]));
     dragRef.current = { kind: 'paint', noteId: newId, startX: x, pitch };
-  }, [selectedClip, selectedIds, pixelsPerSecond, xyToNote, snap, snapDiv, barSec, addNote, deleteNotes, tool]);
+    // Audition the freshly-painted note so the user hears the pitch
+    // they just dropped without having to start playback.
+    if (audition && instrument?.buffer) {
+      previewKey(pitch, instrument.buffer, instrument.baseNote, instrument.volume * 0.85, selectedClip.trackId);
+    }
+  }, [selectedClip, selectedIds, pixelsPerSecond, xyToNote, snap, snapDiv, barSec, addNote, deleteNotes, tool, audition, instrument]);
 
   const onGridMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!selectedClip || !gridRef.current || dragRef.current.kind === 'idle') return;
@@ -826,6 +838,32 @@ export default function PianoRollPanel({ projectId }: Props) {
               </svg>
             </button>
           </div>
+          {/* Audition toggle — when on, painting a note (or clicking
+              an existing one) one-shots the track's instrument at
+              that pitch so the user can hear what they're entering
+              without starting transport. */}
+          <button
+            onClick={() => setAudition((v) => !v)}
+            title={audition ? 'Audition on — click to silence note input' : 'Audition off — click to hear notes as you input them'}
+            className="flex items-center justify-center px-1.5 py-0.5 rounded border"
+            style={{
+              background: audition ? 'rgba(168,85,247,0.35)' : 'rgba(255,255,255,0.04)',
+              borderColor: audition ? 'rgba(168,85,247,0.5)' : 'rgba(255,255,255,0.08)',
+              color: audition ? '#fff' : 'rgba(255,255,255,0.55)',
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              {audition ? (
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+              ) : (
+                <>
+                  <line x1="23" y1="9" x2="17" y2="15" />
+                  <line x1="17" y1="9" x2="23" y2="15" />
+                </>
+              )}
+            </svg>
+          </button>
           <button
             onClick={() => setOpen(false)}
             className="text-white/50 hover:text-white text-[11px] px-1.5"
