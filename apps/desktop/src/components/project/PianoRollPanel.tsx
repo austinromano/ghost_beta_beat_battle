@@ -551,6 +551,17 @@ export default function PianoRollPanel({ projectId }: Props) {
         const dir = e.key === 'ArrowUp' ? 1 : -1;
         const semitones = (e.shiftKey ? 12 : 1) * dir;
         transposeNotes(selectedClip.id, Array.from(selectedIds), semitones);
+        // Audition the new pitch on each step so the user gets aural
+        // feedback while nudging without having to click the note. We
+        // compute the transposed pitch directly rather than re-reading
+        // store state to avoid racing the just-dispatched update.
+        if (audition && instrument?.buffer) {
+          for (const id of selectedIds) {
+            const n = selectedClip.notes.find((nn) => nn.id === id);
+            if (!n) continue;
+            previewKey(n.pitch + semitones, instrument.buffer, instrument.baseNote, instrument.volume * n.velocity, selectedClip.trackId);
+          }
+        }
         return;
       }
 
@@ -651,7 +662,7 @@ export default function PianoRollPanel({ projectId }: Props) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, focused, selectedClip, selectedIds, deleteNotes, addNote, transposeNotes, snap, barSec]);
+  }, [open, focused, selectedClip, selectedIds, deleteNotes, addNote, transposeNotes, snap, barSec, audition, instrument]);
 
   // --- Sample drop on the track header -----------------------------
   const onHeaderDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
