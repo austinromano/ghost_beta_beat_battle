@@ -239,7 +239,14 @@ export default function PianoRollPanel({ projectId }: Props) {
   const [snapDiv, setSnapDiv] = useState(16);
   const [tool, setTool] = useState<Tool>('draw');
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  // Focus scoping — keyboard shortcuts (Delete / Ctrl+C/V/X/A) and the
+  // select-tool crosshair cursor should only fire when the user has
+  // actively clicked into the piano roll. Otherwise pressing Delete in
+  // the arrangement above ends up wiping piano-roll notes too. Default
+  // to false so the panel doesn't grab focus the moment it opens.
+  const [focused, setFocused] = useState(false);
   const dragRef = useRef<DragState>({ kind: 'idle' });
+  const panelRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
   const velocityRef = useRef<HTMLDivElement>(null);
@@ -457,9 +464,35 @@ export default function PianoRollPanel({ projectId }: Props) {
     dragRef.current = { kind: 'idle' };
   }, []);
 
-  // --- Keyboard shortcuts ------------------------------------------
+  // --- Focus scoping ----------------------------------------------
+  // Track whether the user is currently working inside the piano roll
+  // panel. Click anywhere in the panel → focused; click anywhere else
+  // (or escape out of the panel) → unfocused. We use mousedown on
+  // window with a containment check rather than DOM focus events
+  // because most of the panel's children aren't natively focusable
+  // (divs, not inputs) and we don't want to add tabIndex everywhere.
   useEffect(() => {
     if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      const inside = !!panelRef.current && panelRef.current.contains(target);
+      setFocused(inside);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFocused(false);
+    };
+    window.addEventListener('mousedown', onMouseDown, true);
+    window.addEventListener('keydown', onEsc);
+    return () => {
+      window.removeEventListener('mousedown', onMouseDown, true);
+      window.removeEventListener('keydown', onEsc);
+    };
+  }, [open]);
+
+  // --- Keyboard shortcuts ------------------------------------------
+  useEffect(() => {
+    if (!open || !focused) return;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -571,7 +604,7 @@ export default function PianoRollPanel({ projectId }: Props) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, selectedClip, selectedIds, deleteNotes, addNote, snap, barSec]);
+  }, [open, focused, selectedClip, selectedIds, deleteNotes, addNote, snap, barSec]);
 
   // --- Sample drop on the track header -----------------------------
   const onHeaderDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
@@ -669,8 +702,18 @@ export default function PianoRollPanel({ projectId }: Props) {
 
   return (
     <div
+      ref={panelRef}
       className="w-full flex flex-col select-none relative"
-      style={{ height: panelHeight, background: COLOR_BG, borderTop: '1px solid rgba(0,0,0,0.6)' }}
+      style={{
+        height: panelHeight,
+        background: COLOR_BG,
+        // Tinted top border when the panel is the active surface — a
+        // quiet "this is where your shortcuts go" indicator without
+        // being a distracting glow.
+        borderTop: focused
+          ? '1px solid rgba(168,85,247,0.55)'
+          : '1px solid rgba(0,0,0,0.6)',
+      }}
     >
       {/* Resize handle */}
       <div
@@ -823,7 +866,7 @@ export default function PianoRollPanel({ projectId }: Props) {
         <div
           ref={gridRef}
           className="flex-1 relative overflow-auto"
-          style={{ cursor: tool === 'select' ? 'crosshair' : 'default' }}
+          style={{ cursor: focused && tool === 'select' ? 'crosshair' : 'default' }}
           onScroll={onGridScroll}
           onMouseDown={onGridMouseDown}
           onMouseMove={onGridMouseMove}
