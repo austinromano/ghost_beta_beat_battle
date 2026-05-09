@@ -169,6 +169,7 @@ export default function PianoRollPanel({ projectId }: Props) {
   const addNote = useMidiTrack((s) => s.addNote);
   const deleteNotes = useMidiTrack((s) => s.deleteNotes);
   const moveNote = useMidiTrack((s) => s.moveNote);
+  const transposeNotes = useMidiTrack((s) => s.transposeNotes);
   const resizeNote = useMidiTrack((s) => s.resizeNote);
   const startScheduler = useMidiTrack((s) => s.startScheduler);
   const stopScheduler = useMidiTrack((s) => s.stopScheduler);
@@ -507,6 +508,18 @@ export default function PianoRollPanel({ projectId }: Props) {
         return;
       }
 
+      // Transpose — Up/Down by 1 semitone, Shift+Up/Down by an octave.
+      // FL Studio's piano-roll bindings; preventDefault stops the page
+      // from scrolling while the user nudges notes around.
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        if (selectedIds.size === 0) return;
+        e.preventDefault();
+        const dir = e.key === 'ArrowUp' ? 1 : -1;
+        const semitones = (e.shiftKey ? 12 : 1) * dir;
+        transposeNotes(selectedClip.id, Array.from(selectedIds), semitones);
+        return;
+      }
+
       // Select all — useful as a shortcut to grab every note in the
       // clip without having to marquee-drag the whole grid.
       if (mod && (e.key === 'a' || e.key === 'A')) {
@@ -604,7 +617,7 @@ export default function PianoRollPanel({ projectId }: Props) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, focused, selectedClip, selectedIds, deleteNotes, addNote, snap, barSec]);
+  }, [open, focused, selectedClip, selectedIds, deleteNotes, addNote, transposeNotes, snap, barSec]);
 
   // --- Sample drop on the track header -----------------------------
   const onHeaderDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
