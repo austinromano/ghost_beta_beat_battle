@@ -211,11 +211,8 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
             <line x1="14" y1="6" x2="14" y2="14" />
             <line x1="18" y1="6" x2="18" y2="14" />
           </svg>
-          <span className="text-[12px] font-semibold text-white/90 truncate">{track.name || 'MIDI Track'}</span>
+          <span className="text-[12px] font-semibold text-white/90 truncate">{track.name || 'MIDI'}</span>
         </div>
-        <span className="text-[10px] text-white/55 truncate mt-0.5">
-          {inst?.fileId ? inst.name : 'Drop a sample →'}
-        </span>
       </div>
 
       {/* Lane body */}
