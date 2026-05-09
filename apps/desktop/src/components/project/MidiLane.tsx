@@ -8,6 +8,7 @@ import { getCtx } from '../../stores/audio/graph';
 import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
 import MidiClipBlock, { MIDI_CLIP_DRAG_MIME } from './MidiClipBlock';
 import { INSTRUMENT_DRAG_MIME } from '../instruments/InstrumentsSection';
+import { useEffectsStore, EFFECT_DRAG_MIME, type EffectKind } from '../../stores/effectsStore';
 
 // One MIDI track lane in the arrangement. Mirrors the drum-rack lane's
 // shape but per-track (each MIDI project track gets its own lane,
@@ -174,6 +175,40 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
     }
   };
 
+  // ---- Effect drop on the lane (EQ / Comp / Reverb) ----------------
+  // Mirrors the drum-rack lane's FX-drop pattern. Effects land on the
+  // track's effectsStore chain keyed by trackId; midiFxBus listens to
+  // ghost-fx-rewire and rebuilds the per-track FX chain so the new
+  // effect goes live without a playback restart.
+  const [fxDragOver, setFxDragOver] = useState(false);
+  const isEffectDrag = (dt: DataTransfer) => {
+    for (const t of Array.from(dt.types)) if (t === EFFECT_DRAG_MIME) return true;
+    return false;
+  };
+  const onFxDragOver = (e: React.DragEvent) => {
+    if (!isEffectDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!fxDragOver) setFxDragOver(true);
+  };
+  const onFxDragLeave = (e: React.DragEvent) => {
+    if (!isEffectDrag(e.dataTransfer)) return;
+    setFxDragOver(false);
+  };
+  const onFxDrop = (e: React.DragEvent) => {
+    if (!isEffectDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setFxDragOver(false);
+    try {
+      const raw = e.dataTransfer.getData(EFFECT_DRAG_MIME);
+      const payload = JSON.parse(raw) as { kind: EffectKind };
+      if (!payload?.kind) return;
+      useEffectsStore.getState().add(trackId, payload.kind);
+    } catch { /* malformed — ignore */ }
+  };
+
   // ---- MIDI clip drag-drop onto this lane --------------------------
   const [clipDragOver, setClipDragOver] = useState(false);
   const onClipLaneDragOver = (e: React.DragEvent) => {
@@ -219,6 +254,10 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
       transition={{ duration: 0.15 }}
       as="div"
       style={{ height: laneHeight }}
+      onDragOver={onFxDragOver}
+      onDragEnter={onFxDragOver}
+      onDragLeave={onFxDragLeave}
+      onDrop={onFxDrop}
     >
       {/* Track header — narrower than the audio header since MIDI
           tracks don't have warp/pitch/trim controls. Drop a sample
@@ -302,6 +341,23 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
               style={{ background: 'rgba(168, 85, 247, 0.35)', backdropFilter: 'blur(4px)' }}
             >
               Drop to move clip here
+            </span>
+          </div>
+        )}
+        {fxDragOver && (
+          <div
+            className="absolute inset-0 pointer-events-none rounded-r-lg flex items-center justify-center"
+            style={{
+              background: 'rgba(0, 180, 216, 0.10)',
+              boxShadow: 'inset 0 0 0 2px rgba(0, 180, 216, 0.6)',
+              zIndex: 6,
+            }}
+          >
+            <span
+              className="text-[11px] font-bold tracking-wider uppercase text-white px-2 py-1 rounded-md"
+              style={{ background: 'rgba(0, 180, 216, 0.35)', backdropFilter: 'blur(4px)' }}
+            >
+              Drop to add effect to this track
             </span>
           </div>
         )}

@@ -1,9 +1,10 @@
 import { create } from 'zustand';
-import { getCtx, getMaster, safeStop } from './audio/graph';
+import { getCtx, safeStop } from './audio/graph';
 import { audioBufferCache, getAudioData } from '../lib/audio';
 import { useAudioStore, getStartedAt } from './audioStore';
 import { sendSessionAction } from '../lib/socket';
 import { pitchShiftRatio, clampPitch, clampVelocity } from '../lib/midiSchedule';
+import { getMidiTrackBus } from './audio/midiFxBus';
 
 // MIDI track / piano-roll store.
 //
@@ -554,7 +555,14 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
           const peak = inst.volume * note.velocity;
           const sustainAmp = peak * inst.sustainLevel;
           src.connect(g);
-          g.connect(getMaster());
+          // Route through the track's persistent FX bus instead of
+          // going straight to master. The bus owns the full effect
+          // chain (eq / comp / reverb) and handles its own master
+          // connection, so we just need to feed the per-note gain
+          // into it. Effects added via drag-drop on the lane mutate
+          // the chain; midiFxBus listens to ghost-fx-rewire and
+          // rebuilds the wiring without disturbing this connection.
+          g.connect(getMidiTrackBus(clip.trackId));
 
           // Sample window: skip into the buffer by startOffset, stop
           // when the playback head crosses endOffset. Both expressed

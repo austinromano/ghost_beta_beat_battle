@@ -3,7 +3,8 @@ import { useMidiTrack } from '../../stores/midiTrackStore';
 import { useProjectStore } from '../../stores/projectStore';
 import { audioBufferCache, getAudioData } from '../../lib/audio';
 import { api } from '../../lib/api';
-import { getCtx, getMaster } from '../../stores/audio/graph';
+import { getCtx } from '../../stores/audio/graph';
+import { getMidiTrackBus } from '../../stores/audio/midiFxBus';
 import { pitchShiftRatio } from '../../lib/midiSchedule';
 import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
 
@@ -253,7 +254,7 @@ function SamplerBody({ projectId, trackId, inst, ensureInstrument, setInstrument
         setInstrumentVolume={setInstrumentVolume}
         setSamplerEnvelope={setSamplerEnvelope}
       />
-      <SamplerKeyboardStrip inst={inst} />
+      <SamplerKeyboardStrip inst={inst} trackId={trackId} />
     </div>
   );
 }
@@ -555,7 +556,7 @@ function BaseNotePicker({ value, onChange }: { value: number; onChange: (v: numb
 
 // ---- Click-to-preview keyboard at the bottom -----------------------
 
-function SamplerKeyboardStrip({ inst }: { inst: ReturnType<typeof useMidiTrack.getState>['instruments'][string] | undefined }) {
+function SamplerKeyboardStrip({ inst, trackId }: { inst: ReturnType<typeof useMidiTrack.getState>['instruments'][string] | undefined; trackId: string }) {
   const [hovering, setHovering] = useState<number | null>(null);
   const previewKey = (pitch: number) => {
     if (!inst?.buffer) return;
@@ -566,7 +567,10 @@ function SamplerKeyboardStrip({ inst }: { inst: ReturnType<typeof useMidiTrack.g
     const g = ctx.createGain();
     g.gain.value = inst.volume;
     src.connect(g);
-    g.connect(getMaster());
+    // Route preview through the same FX bus the scheduler uses, so
+    // turning on EQ / Comp / Reverb on the track is audible in the
+    // keyboard preview too.
+    g.connect(getMidiTrackBus(trackId));
     const startBufSec = inst.startOffset * inst.buffer.duration;
     const endBufSec = inst.endOffset * inst.buffer.duration;
     src.start(0, startBufSec);

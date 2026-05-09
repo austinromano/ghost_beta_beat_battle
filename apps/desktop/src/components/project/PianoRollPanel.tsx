@@ -657,6 +657,7 @@ export default function PianoRollPanel({ projectId }: Props) {
                 previewBuffer={instrument?.buffer}
                 previewBaseNote={instrument?.baseNote}
                 previewVolume={instrument?.volume}
+                previewTrackId={selectedClip?.trackId}
               />
             </div>
             {/* Grid content — pitch bands, time grid lines, notes,

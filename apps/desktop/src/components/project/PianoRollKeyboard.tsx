@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { getCtx, getMaster } from '../../stores/audio/graph';
+import { getMidiTrackBus } from '../../stores/audio/midiFxBus';
 import { pitchShiftRatio } from '../../lib/midiSchedule';
 
 // Vertical piano keyboard, FL-Studio style. Each semitone is one row;
@@ -19,6 +20,10 @@ interface Props {
   previewBuffer?: AudioBuffer;
   previewBaseNote?: number;
   previewVolume?: number;
+  // Optional track id — when set, the preview routes through that
+  // track's FX bus so EQ / Comp / Reverb are audible. Without it we
+  // fall back to a direct connection to master.
+  previewTrackId?: string;
 }
 
 const BLACK_KEY_PITCHES = new Set([1, 3, 6, 8, 10]);
@@ -31,7 +36,7 @@ function pitchToLabel(pitch: number): string | null {
   return `C${octave}`;
 }
 
-function previewKey(pitch: number, buffer?: AudioBuffer, baseNote = 60, volume = 1) {
+function previewKey(pitch: number, buffer: AudioBuffer | undefined, baseNote: number, volume: number, trackId: string | undefined) {
   if (!buffer) return;
   const ctx = getCtx();
   const src = ctx.createBufferSource();
@@ -40,14 +45,15 @@ function previewKey(pitch: number, buffer?: AudioBuffer, baseNote = 60, volume =
   const g = ctx.createGain();
   g.gain.value = volume;
   src.connect(g);
-  g.connect(getMaster());
+  // Per-track FX bus when we know the track, master otherwise.
+  g.connect(trackId ? getMidiTrackBus(trackId) : getMaster());
   src.start();
   src.onended = () => {
     try { src.disconnect(); g.disconnect(); } catch { /* ignore */ }
   };
 }
 
-function PianoRollKeyboardInner({ lowPitch, highPitch, pitchHeight, width, previewBuffer, previewBaseNote, previewVolume }: Props) {
+function PianoRollKeyboardInner({ lowPitch, highPitch, pitchHeight, width, previewBuffer, previewBaseNote, previewVolume, previewTrackId }: Props) {
   // Top-to-bottom: highPitch first, lowPitch last — matches the grid.
   const keys: Array<{ pitch: number; isBlack: boolean; label: string | null }> = [];
   for (let p = highPitch; p >= lowPitch; p--) {
@@ -67,7 +73,7 @@ function PianoRollKeyboardInner({ lowPitch, highPitch, pitchHeight, width, previ
       {keys.map((k) => (
         <div
           key={k.pitch}
-          onMouseDown={() => previewKey(k.pitch, previewBuffer, previewBaseNote, previewVolume)}
+          onMouseDown={() => previewKey(k.pitch, previewBuffer, previewBaseNote ?? 60, previewVolume ?? 1, previewTrackId)}
           className="relative cursor-pointer"
           style={{
             height: pitchHeight,
