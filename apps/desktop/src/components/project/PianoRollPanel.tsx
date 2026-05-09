@@ -142,7 +142,17 @@ type DragState =
   | { kind: 'idle' }
   | { kind: 'paint'; noteId: string; startX: number; pitch: number }
   | { kind: 'move'; noteIds: string[]; originX: number; originY: number; originStarts: Map<string, number>; originPitches: Map<string, number> }
-  | { kind: 'resize'; noteId: string; originX: number; originDuration: number };
+  | { kind: 'resize'; noteId: string; originX: number; originDuration: number }
+  | { kind: 'marquee'; startX: number; startY: number; baseSelection: Set<string>; additive: boolean };
+
+type Tool = 'draw' | 'select';
+
+interface ClipboardNote {
+  pitch: number;
+  relStartSec: number;
+  durationSec: number;
+  velocity: number;
+}
 
 export default function PianoRollPanel({ projectId }: Props) {
   const open = useMidiTrack((s) => s.open);
@@ -227,10 +237,19 @@ export default function PianoRollPanel({ projectId }: Props) {
   // --- Selection + drag --------------------------------------------
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [snapDiv, setSnapDiv] = useState(16);
+  const [tool, setTool] = useState<Tool>('draw');
+  const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const dragRef = useRef<DragState>({ kind: 'idle' });
   const gridRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
   const velocityRef = useRef<HTMLDivElement>(null);
+  // Clipboard + paste anchor. clipboardRef stores notes with startSec
+  // normalized so the earliest note sits at relStartSec=0; pasteAnchorRef
+  // tracks where the *next* paste should land so consecutive Ctrl+V's
+  // chain after the previous paste instead of stacking on top of it.
+  const clipboardRef = useRef<ClipboardNote[]>([]);
+  const clipboardSpanRef = useRef<number>(0);
+  const pasteAnchorRef = useRef<number | null>(null);
 
   const snap = useCallback((sec: number): number => {
     if (snapDiv <= 0) return Math.max(0, sec);
@@ -339,7 +358,25 @@ export default function PianoRollPanel({ projectId }: Props) {
       return;
     }
 
-    // Empty grid → paint
+    // Empty grid — branch on tool.
+    if (tool === 'select') {
+      // Start a marquee. Holding shift means "add to existing
+      // selection"; otherwise the existing selection is dropped as
+      // soon as the user releases without intersecting anything.
+      const additive = e.shiftKey;
+      dragRef.current = {
+        kind: 'marquee',
+        startX: x,
+        startY: y,
+        baseSelection: new Set(additive ? selectedIds : []),
+        additive,
+      };
+      setMarqueeRect({ x, y, w: 0, h: 0 });
+      if (!additive) setSelectedIds(new Set());
+      return;
+    }
+
+    // Draw tool → paint a new note.
     const { sec, pitch } = xyToNote(x, y);
     const startSec = snap(sec);
     const stepSec = snapDiv > 0 ? barSec / snapDiv : 0.25;
@@ -351,7 +388,7 @@ export default function PianoRollPanel({ projectId }: Props) {
     });
     setSelectedIds(new Set([newId]));
     dragRef.current = { kind: 'paint', noteId: newId, startX: x, pitch };
-  }, [selectedClip, selectedIds, pixelsPerSecond, xyToNote, snap, snapDiv, barSec, addNote, deleteNotes]);
+  }, [selectedClip, selectedIds, pixelsPerSecond, xyToNote, snap, snapDiv, barSec, addNote, deleteNotes, tool]);
 
   const onGridMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!selectedClip || !gridRef.current || dragRef.current.kind === 'idle') return;
@@ -389,10 +426,34 @@ export default function PianoRollPanel({ projectId }: Props) {
         const newStart = snap(baseStart + dSec);
         moveNote(selectedClip.id, id, newStart, basePitch + dPitch);
       }
+    } else if (drag.kind === 'marquee') {
+      const rx = Math.min(drag.startX, x);
+      const ry = Math.min(drag.startY, y);
+      const rw = Math.abs(x - drag.startX);
+      const rh = Math.abs(y - drag.startY);
+      setMarqueeRect({ x: rx, y: ry, w: rw, h: rh });
+      // Live-update selection so the user gets immediate feedback as
+      // they drag. Test note bounding boxes against the rect — any note
+      // overlapping the rect is in the selection (plus baseSelection
+      // when shift is held).
+      const next = new Set(drag.baseSelection);
+      for (const n of selectedClip.notes) {
+        const nLeft = n.startSec * pixelsPerSecond;
+        const nWidth = Math.max(2, n.durationSec * pixelsPerSecond);
+        const nTop = (highPitch - n.pitch) * PITCH_HEIGHT + 1;
+        const nHeight = Math.max(1, PITCH_HEIGHT - 2);
+        const overlaps = nLeft < rx + rw && nLeft + nWidth > rx
+                      && nTop < ry + rh && nTop + nHeight > ry;
+        if (overlaps) next.add(n.id);
+      }
+      setSelectedIds(next);
     }
-  }, [selectedClip, pixelsPerSecond, barSec, snapDiv, snap, moveNote, resizeNote]);
+  }, [selectedClip, pixelsPerSecond, barSec, snapDiv, snap, moveNote, resizeNote, highPitch]);
 
   const onGridMouseUp = useCallback(() => {
+    if (dragRef.current.kind === 'marquee') {
+      setMarqueeRect(null);
+    }
     dragRef.current = { kind: 'idle' };
   }, []);
 
@@ -403,16 +464,114 @@ export default function PianoRollPanel({ projectId }: Props) {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (!selectedClip) return;
+      const mod = e.ctrlKey || e.metaKey;
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedIds.size === 0) return;
         e.preventDefault();
         deleteNotes(selectedClip.id, Array.from(selectedIds));
         setSelectedIds(new Set());
+        return;
+      }
+
+      // Select all — useful as a shortcut to grab every note in the
+      // clip without having to marquee-drag the whole grid.
+      if (mod && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        setSelectedIds(new Set(selectedClip.notes.map((n) => n.id)));
+        return;
+      }
+
+      // Copy — store relative startSec so paste can drop the block at
+      // an arbitrary anchor while preserving inter-note timing.
+      if (mod && (e.key === 'c' || e.key === 'C')) {
+        if (selectedIds.size === 0) return;
+        e.preventDefault();
+        const sel = selectedClip.notes.filter((n) => selectedIds.has(n.id));
+        if (sel.length === 0) return;
+        const minStart = Math.min(...sel.map((n) => n.startSec));
+        const maxEnd = Math.max(...sel.map((n) => n.startSec + n.durationSec));
+        clipboardRef.current = sel.map((n) => ({
+          pitch: n.pitch,
+          relStartSec: n.startSec - minStart,
+          durationSec: n.durationSec,
+          velocity: n.velocity,
+        }));
+        clipboardSpanRef.current = Math.max(barSec / 4, maxEnd - minStart);
+        // Reset the paste anchor so the next Ctrl+V starts at the
+        // playhead (or right after the source block) rather than
+        // continuing whatever chain the previous clipboard had built.
+        pasteAnchorRef.current = null;
+        return;
+      }
+
+      // Cut — copy + delete in one shot, FL-Studio style.
+      if (mod && (e.key === 'x' || e.key === 'X')) {
+        if (selectedIds.size === 0) return;
+        e.preventDefault();
+        const sel = selectedClip.notes.filter((n) => selectedIds.has(n.id));
+        if (sel.length === 0) return;
+        const minStart = Math.min(...sel.map((n) => n.startSec));
+        const maxEnd = Math.max(...sel.map((n) => n.startSec + n.durationSec));
+        clipboardRef.current = sel.map((n) => ({
+          pitch: n.pitch,
+          relStartSec: n.startSec - minStart,
+          durationSec: n.durationSec,
+          velocity: n.velocity,
+        }));
+        clipboardSpanRef.current = Math.max(barSec / 4, maxEnd - minStart);
+        pasteAnchorRef.current = null;
+        deleteNotes(selectedClip.id, Array.from(selectedIds));
+        setSelectedIds(new Set());
+        return;
+      }
+
+      // Paste — anchor at the playhead if it's inside this clip;
+      // otherwise chain after the previous paste (or right after the
+      // source block on the first paste). Snap the anchor so pasted
+      // notes land on the grid the user is currently working with.
+      if (mod && (e.key === 'v' || e.key === 'V')) {
+        if (clipboardRef.current.length === 0) return;
+        e.preventDefault();
+        const audio = useAudioStore.getState();
+        const playheadInClip = audio.isPlaying
+          && audio.currentTime >= selectedClip.startSec
+          && audio.currentTime < selectedClip.startSec + selectedClip.lengthSec;
+        let anchor: number;
+        if (playheadInClip) {
+          anchor = snap(audio.currentTime - selectedClip.startSec);
+          pasteAnchorRef.current = anchor + clipboardSpanRef.current;
+        } else if (pasteAnchorRef.current !== null) {
+          anchor = pasteAnchorRef.current;
+          pasteAnchorRef.current = anchor + clipboardSpanRef.current;
+        } else {
+          // First paste with no playhead — drop the block right after
+          // the original copied notes so the user can stamp out a
+          // sequence by holding Ctrl+V.
+          const sel = selectedClip.notes.filter((n) => selectedIds.has(n.id));
+          const seedEnd = sel.length > 0
+            ? Math.max(...sel.map((n) => n.startSec + n.durationSec))
+            : 0;
+          anchor = snap(seedEnd);
+          pasteAnchorRef.current = anchor + clipboardSpanRef.current;
+        }
+        const newIds: string[] = [];
+        for (const c of clipboardRef.current) {
+          const id = addNote(selectedClip.id, {
+            pitch: c.pitch,
+            startSec: anchor + c.relStartSec,
+            durationSec: c.durationSec,
+            velocity: c.velocity,
+          });
+          newIds.push(id);
+        }
+        setSelectedIds(new Set(newIds));
+        return;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, selectedClip, selectedIds, deleteNotes]);
+  }, [open, selectedClip, selectedIds, deleteNotes, addNote, snap, barSec]);
 
   // --- Sample drop on the track header -----------------------------
   const onHeaderDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
@@ -577,6 +736,40 @@ export default function PianoRollPanel({ projectId }: Props) {
               ))}
             </select>
           </label>
+          {/* Tool toggle — pencil paints new notes (default), marquee
+              drag-selects existing notes for copy/delete/move. Mirrors
+              the FL Studio piano-roll tool palette. */}
+          <div className="flex items-center bg-white/[0.04] border border-white/[0.08] rounded overflow-hidden">
+            <button
+              onClick={() => setTool('draw')}
+              title="Draw tool — click to paint notes"
+              className="px-1.5 py-0.5 flex items-center justify-center"
+              style={{
+                background: tool === 'draw' ? 'rgba(168,85,247,0.35)' : 'transparent',
+                color: tool === 'draw' ? '#fff' : 'rgba(255,255,255,0.55)',
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 19l7-7 3 3-7 7-3-3z" />
+                <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+                <path d="M2 2l7.586 7.586" />
+                <circle cx="11" cy="11" r="2" />
+              </svg>
+            </button>
+            <button
+              onClick={() => setTool('select')}
+              title="Select tool — drag to marquee-select notes"
+              className="px-1.5 py-0.5 flex items-center justify-center"
+              style={{
+                background: tool === 'select' ? 'rgba(168,85,247,0.35)' : 'transparent',
+                color: tool === 'select' ? '#fff' : 'rgba(255,255,255,0.55)',
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3 2">
+                <rect x="3" y="3" width="18" height="18" rx="1" />
+              </svg>
+            </button>
+          </div>
           <button
             onClick={() => setOpen(false)}
             className="text-white/50 hover:text-white text-[11px] px-1.5"
@@ -630,6 +823,7 @@ export default function PianoRollPanel({ projectId }: Props) {
         <div
           ref={gridRef}
           className="flex-1 relative overflow-auto"
+          style={{ cursor: tool === 'select' ? 'crosshair' : 'default' }}
           onScroll={onGridScroll}
           onMouseDown={onGridMouseDown}
           onMouseMove={onGridMouseMove}
@@ -714,6 +908,24 @@ export default function PianoRollPanel({ projectId }: Props) {
                     background: '#FFFFFF',
                     boxShadow: '0 0 6px rgba(255,255,255,0.55)',
                     opacity: 0.9,
+                  }}
+                />
+              )}
+              {/* Marquee — translucent rectangle drawn while the user
+                  drags with the select tool. Sits above the grid lines
+                  but below notes so selected pills still render with
+                  their glow on top. */}
+              {marqueeRect && (
+                <div
+                  className="absolute pointer-events-none"
+                  style={{
+                    left: marqueeRect.x,
+                    top: marqueeRect.y,
+                    width: marqueeRect.w,
+                    height: marqueeRect.h,
+                    background: 'rgba(168,85,247,0.15)',
+                    border: '1px dashed rgba(168,85,247,0.85)',
+                    borderRadius: 2,
                   }}
                 />
               )}
