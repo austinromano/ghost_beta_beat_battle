@@ -197,6 +197,7 @@ export default function PianoRollPanel({ projectId }: Props) {
 
   const setLoopRegion = useAudioStore((s) => s.setLoopRegion);
   const deleteClip = useMidiTrack((s) => s.deleteClip);
+  const ghostClipIds = useMidiTrack((s) => s.ghostClipIds);
 
   // Clip-level Delete / Backspace — fires when the user has selected a
   // MIDI clip in the lane but the piano-roll panel itself isn't the
@@ -223,6 +224,16 @@ export default function PianoRollPanel({ projectId }: Props) {
     [clips, selectedClipId],
   );
   const instrument = selectedClip ? instruments[selectedClip.trackId] : undefined;
+  // Resolve ghost-layer clip ids → actual clips. Filter out the
+  // active clip (no point ghosting what's already shown) and any
+  // ids that no longer exist (clip was deleted while in the list).
+  const ghostClips = useMemo(
+    () => ghostClipIds
+      .filter((id) => id !== selectedClipId)
+      .map((id) => clips.find((c) => c.id === id))
+      .filter((c): c is typeof clips[number] => !!c),
+    [ghostClipIds, clips, selectedClipId],
+  );
   // Pull the project track's display name so the header reads "Piano
   // Roll · <track name> · <sample>" — the user can tell at a glance
   // which MIDI track they're editing when there are several.
@@ -1150,6 +1161,33 @@ export default function PianoRollPanel({ projectId }: Props) {
                   }}
                 />
               ))}
+              {/* Ghost notes — tracing-paper layer for any clip the
+                  user has marked via right-click → "Show as ghost
+                  layer". Aligned by clip-relative time so a note at
+                  rel=0 in the ghost shows at rel=0 in the editor.
+                  Renders BEFORE the active notes so editable pills
+                  visually sit on top. Pure presentational divs (no
+                  data-note-id), so the grid's mousedown handlers
+                  ignore them. */}
+              {ghostClips.map((gc) => gc.notes.map((n) => {
+                const left = n.startSec * pixelsPerSecond;
+                const top = (highPitch - n.pitch) * PITCH_HEIGHT + 1;
+                const width = Math.max(2, n.durationSec * pixelsPerSecond);
+                const height = Math.max(1, PITCH_HEIGHT - 2);
+                return (
+                  <div
+                    key={`ghost:${gc.id}:${n.id}`}
+                    className="absolute pointer-events-none"
+                    style={{
+                      left, top, width, height,
+                      background: 'rgba(255,255,255,0.10)',
+                      border: '1px dashed rgba(255,255,255,0.28)',
+                      borderRadius: 2,
+                      opacity: 0.55,
+                    }}
+                  />
+                );
+              }))}
               {/* Notes */}
               {selectedClip?.notes.map((n) => (
                 <PianoRollNote

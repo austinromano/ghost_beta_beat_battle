@@ -95,10 +95,23 @@ interface MidiTrackState {
 
   selectedClipId: string | null;
 
+  // Ghost-layer overlay clip ids. Tracing-paper UX: each clip listed
+  // here renders its notes as a faded, non-interactive overlay
+  // behind the actively-edited clip in the piano roll, so the user
+  // can write a part that fits with another clip without flipping
+  // back and forth. Notes align by clip-relative time (note at
+  // relSec=0 in the ghost shows at relSec=0 in the editor). The
+  // active selectedClipId is filtered out at render time, so
+  // toggling a clip here doesn't conflict with editing it normally.
+  ghostClipIds: string[];
+
   setOpen: (v: boolean) => void;
   setPanelHeight: (px: number) => void;
   openSampler: (trackId: string | null) => void;
   setSamplerPosition: (pos: { x: number; y: number } | null) => void;
+  // Ghost-layer toggles.
+  toggleGhostClip: (clipId: string) => void;
+  clearGhostClips: () => void;
 
   // Instrument config
   ensureInstrument: (trackId: string) => void;
@@ -318,6 +331,17 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
   instruments: {},
   clips: [],
   selectedClipId: null,
+  ghostClipIds: [],
+
+  toggleGhostClip: (clipId) => set((s) => {
+    const has = s.ghostClipIds.includes(clipId);
+    return {
+      ghostClipIds: has
+        ? s.ghostClipIds.filter((id) => id !== clipId)
+        : [...s.ghostClipIds, clipId],
+    };
+  }),
+  clearGhostClips: () => set({ ghostClipIds: [] }),
 
   canUndoMidi: false,
   canRedoMidi: false,

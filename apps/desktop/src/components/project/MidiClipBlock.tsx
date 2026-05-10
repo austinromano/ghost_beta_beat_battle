@@ -29,6 +29,8 @@ interface Props {
   onResize: (newLengthSec: number) => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  onToggleGhost: () => void;
+  isGhost: boolean;
   // Convert a clientX (page coords) → project-time on this lane. The
   // parent owns the lane geometry so this gets passed in.
   xToTime: (clientX: number) => number;
@@ -37,7 +39,7 @@ interface Props {
 const PREVIEW_LOW_PITCH = 36;   // C2
 const PREVIEW_HIGH_PITCH = 96;  // C7
 
-function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSelect, onMove, onResize, onDelete, onDuplicate, xToTime }: Props) {
+function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSelect, onMove, onResize, onDelete, onDuplicate, onToggleGhost, isGhost, xToTime }: Props) {
   void onDelete; // Delete now lives on the keyboard (Delete / Backspace)
   const leftPct = (clip.startSec / arrangementDur) * 100;
   const widthPct = (clip.lengthSec / arrangementDur) * 100;
@@ -178,10 +180,19 @@ function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSele
       {/* Top label strip — clip name placeholder for now. Future: clip
           name editable via double-click. */}
       <div
-        className="absolute top-0 left-0 right-0 px-1.5 py-0.5 text-[9px] font-mono text-white/85 truncate pointer-events-none"
+        className="absolute top-0 left-0 right-0 px-1.5 py-0.5 text-[9px] font-mono text-white/85 truncate pointer-events-none flex items-center gap-1"
         style={{ background: 'rgba(0,0,0,0.25)' }}
       >
-        MIDI · {clip.notes.length} {clip.notes.length === 1 ? 'note' : 'notes'}
+        <span className="truncate">MIDI · {clip.notes.length} {clip.notes.length === 1 ? 'note' : 'notes'}</span>
+        {isGhost && (
+          <span
+            className="ml-auto px-1 rounded text-[8px] font-bold tracking-wider"
+            style={{ background: 'rgba(255,255,255,0.20)', color: 'rgba(255,255,255,0.95)' }}
+            title="Showing as ghost layer in the piano roll"
+          >
+            GHOST
+          </span>
+        )}
       </div>
       {/* Note preview — one dot per note. Ghost-green dots stand out
           on the violet body. Pitches outside the preview range get
@@ -224,7 +235,7 @@ function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSele
       {menu && (
         <div
           onMouseDown={(e) => e.stopPropagation()}
-          className="fixed z-[60] min-w-[160px] rounded-md py-1 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur-md"
+          className="fixed z-[60] min-w-[200px] rounded-md py-1 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur-md"
           style={{
             left: menu.x, top: menu.y,
             background: 'rgba(20, 12, 30, 0.96)',
@@ -240,6 +251,28 @@ function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSele
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
             </svg>
             Duplicate
+          </button>
+          <button
+            onClick={() => { setMenu(null); onToggleGhost(); }}
+            className="w-full px-3 py-1.5 text-[13px] text-left text-white/80 hover:bg-white/[0.06] hover:text-white transition-colors flex items-center gap-2"
+            title="Show this clip's notes as a faded overlay in the piano roll while editing another clip"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {isGhost ? (
+                <>
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                  <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                  <path d="M14.12 14.12A3 3 0 1 1 9.88 9.88" />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </>
+              ) : (
+                <>
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </>
+              )}
+            </svg>
+            {isGhost ? 'Hide ghost layer' : 'Show as ghost layer'}
           </button>
         </div>
       )}
