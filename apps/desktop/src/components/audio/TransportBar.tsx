@@ -6,6 +6,7 @@ import { api } from '../../lib/api';
 import { getSocket } from '../../lib/socket';
 import { useCollabStore } from '../../stores/collabStore';
 import { useDrumRack, getDrumSyncSnapshot } from '../../stores/drumRackStore';
+import { useMidiTrack } from '../../stores/midiTrackStore';
 import FrequencyBar, { type VizMode } from './FrequencyBar';
 
 // Ableton-style time-region clipboard. Cmd+C captures the selection as a
@@ -47,6 +48,8 @@ export default function TransportBar({ tracks, projectId, projectTempo, onTempoC
   const projectBpm = useAudioStore((s) => s.projectBpm);
   const canUndo = useAudioStore((s) => s.canUndo);
   const canRedo = useAudioStore((s) => s.canRedo);
+  const canUndoMidi = useMidiTrack((s) => s.canUndoMidi);
+  const canRedoMidi = useMidiTrack((s) => s.canRedoMidi);
   const play = useAudioStore((s) => s.play);
   const pause = useAudioStore((s) => s.pause);
   const seekTo = useAudioStore((s) => s.seekTo);
@@ -65,6 +68,38 @@ export default function TransportBar({ tracks, projectId, projectTempo, onTempoC
       setProjectBpm(projectTempo);
     }
   }, [projectTempo, setProjectBpm]);
+
+  // Global Ctrl+Z / Ctrl+Shift+Z bindings. Mirrors the toolbar
+  // buttons — try MIDI undo first, fall back to audio undo. Bails on
+  // input/textarea targets so typing in a track-name field doesn't
+  // accidentally hit undo on the project.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key !== 'z' && e.key !== 'Z') return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const isRedo = e.shiftKey;
+      e.preventDefault();
+      if (isRedo) {
+        if (useMidiTrack.getState().canRedoMidi) {
+          useMidiTrack.getState().redoMidi();
+          return;
+        }
+        const state = useAudioStore.getState();
+        if (state.canRedo) state.redo();
+      } else {
+        if (useMidiTrack.getState().canUndoMidi) {
+          useMidiTrack.getState().undoMidi();
+          return;
+        }
+        const state = useAudioStore.getState();
+        if (state.canUndo) state.undo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     if (!tracks || !projectId) return;
@@ -618,6 +653,14 @@ export default function TransportBar({ tracks, projectId, projectTempo, onTempoC
         <div className="absolute inset-0 flex items-center z-10 pointer-events-none">
           <div className="absolute left-3 flex items-center gap-1 pointer-events-auto" style={{ filter: 'drop-shadow(0 0 3px rgba(0,0,0,0.8))' }}>
             <button onClick={() => {
+              // Prefer MIDI undo when available — that's where clip /
+              // note deletes go. Audio undo (waveform edits) is the
+              // fallback so the existing pitch/time-stretch undo path
+              // still works when nothing's queued in the MIDI stack.
+              if (useMidiTrack.getState().canUndoMidi) {
+                useMidiTrack.getState().undoMidi();
+                return;
+              }
               const state = useAudioStore.getState();
               if (!state.canUndo) return;
               state.undo();
@@ -625,10 +668,14 @@ export default function TransportBar({ tracks, projectId, projectTempo, onTempoC
                 const fileId = currentProject?.tracks?.find((tr: any) => tr.id === id)?.fileId;
                 if (fileId) { cacheBuffer(fileId, t.buffer); }
               });
-            }} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${canUndo ? 'text-white/60 hover:text-white' : 'text-white/15 cursor-not-allowed'}`} title="Undo">
+            }} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${(canUndo || canUndoMidi) ? 'text-white/60 hover:text-white' : 'text-white/15 cursor-not-allowed'}`} title="Undo (Ctrl+Z)">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
             </button>
             <button onClick={() => {
+              if (useMidiTrack.getState().canRedoMidi) {
+                useMidiTrack.getState().redoMidi();
+                return;
+              }
               const state = useAudioStore.getState();
               if (!state.canRedo) return;
               state.redo();
@@ -636,7 +683,7 @@ export default function TransportBar({ tracks, projectId, projectTempo, onTempoC
                 const fileId = currentProject?.tracks?.find((tr: any) => tr.id === id)?.fileId;
                 if (fileId) { cacheBuffer(fileId, t.buffer); }
               });
-            }} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${canRedo ? 'text-white/60 hover:text-white' : 'text-white/15 cursor-not-allowed'}`} title="Redo">
+            }} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${(canRedo || canRedoMidi) ? 'text-white/60 hover:text-white' : 'text-white/15 cursor-not-allowed'}`} title="Redo (Ctrl+Shift+Z)">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" /></svg>
             </button>
             <span className="text-[9px] font-mono text-white/60 ml-1">{formatTime(currentTime)}</span>

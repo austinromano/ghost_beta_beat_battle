@@ -127,6 +127,18 @@ interface MidiTrackState {
   setNoteVelocity: (clipId: string, noteId: string, velocity: number) => void;
   transposeNotes: (clipId: string, noteIds: string[], semitones: number) => void;
 
+  // Undo / redo — captures clips + instruments snapshots before
+  // destructive ops (delete clip / delete note / delete track).
+  // captureUndoSnapshot is a public hook for paths that mutate the
+  // store directly (e.g. the lane's track-delete) without going
+  // through one of the typed actions above.
+  canUndoMidi: boolean;
+  canRedoMidi: boolean;
+  lastMidiUndoTs: number;
+  captureUndoSnapshot: (label: string) => void;
+  undoMidi: () => boolean;
+  redoMidi: () => boolean;
+
   // Scheduler
   startScheduler: (projectId: string) => void;
   stopScheduler: () => void;
@@ -140,6 +152,34 @@ interface MidiTrackState {
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 const activeSources: Set<AudioBufferSourceNode> = new Set();
+
+// Undo / redo state. Snapshots store `clips` + `instruments` so any
+// destructive action (delete clip, delete note, delete whole track)
+// can be reversed. Capped at MAX_UNDO entries so a long session can't
+// balloon localStorage / memory; oldest entries fall off the front.
+interface MidiUndoSnapshot {
+  clips: MidiClip[];
+  instruments: Record<string, MidiInstrument>;
+  selectedClipId: string | null;
+  label: string;
+  ts: number;
+}
+const midiUndoStack: MidiUndoSnapshot[] = [];
+const midiRedoStack: MidiUndoSnapshot[] = [];
+const MAX_UNDO = 50;
+function snapshotState(label: string): MidiUndoSnapshot {
+  const s = useMidiTrack.getState();
+  // Deep-clone clips so future mutations don't bleed into the
+  // snapshot. Instruments share buffer references — buffers are
+  // immutable and re-fetchable from fileId, so a shallow copy is fine.
+  const clips: MidiClip[] = s.clips.map((c) => ({
+    ...c,
+    notes: c.notes.map((n) => ({ ...n })),
+  }));
+  const instruments: Record<string, MidiInstrument> = {};
+  for (const [k, v] of Object.entries(s.instruments)) instruments[k] = { ...v };
+  return { clips, instruments, selectedClipId: s.selectedClipId, label, ts: Date.now() };
+}
 // Voice tracking per track for the polyphony cap. Each track gets a
 // circular buffer of currently-playing sources; once it hits the cap
 // the oldest is force-stopped to make room for the new note.
@@ -257,6 +297,52 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
   instruments: {},
   clips: [],
   selectedClipId: null,
+
+  canUndoMidi: false,
+  canRedoMidi: false,
+  lastMidiUndoTs: 0,
+
+  captureUndoSnapshot: (label) => {
+    if (_applyingRemote || _hydrating) return;
+    midiUndoStack.push(snapshotState(label));
+    if (midiUndoStack.length > MAX_UNDO) midiUndoStack.shift();
+    midiRedoStack.length = 0;
+    set({ canUndoMidi: true, canRedoMidi: false, lastMidiUndoTs: Date.now() });
+  },
+
+  undoMidi: () => {
+    if (midiUndoStack.length === 0) return false;
+    const snap = midiUndoStack.pop()!;
+    // Push current state onto redo so a follow-up redo restores
+    // the just-undone destructive change.
+    midiRedoStack.push(snapshotState(`Redo: ${snap.label}`));
+    if (midiRedoStack.length > MAX_UNDO) midiRedoStack.shift();
+    set({
+      clips: snap.clips,
+      instruments: snap.instruments,
+      selectedClipId: snap.selectedClipId,
+      canUndoMidi: midiUndoStack.length > 0,
+      canRedoMidi: true,
+      lastMidiUndoTs: Date.now(),
+    });
+    return true;
+  },
+
+  redoMidi: () => {
+    if (midiRedoStack.length === 0) return false;
+    const snap = midiRedoStack.pop()!;
+    midiUndoStack.push(snapshotState(`Undo: ${snap.label}`));
+    if (midiUndoStack.length > MAX_UNDO) midiUndoStack.shift();
+    set({
+      clips: snap.clips,
+      instruments: snap.instruments,
+      selectedClipId: snap.selectedClipId,
+      canUndoMidi: true,
+      canRedoMidi: midiRedoStack.length > 0,
+      lastMidiUndoTs: Date.now(),
+    });
+    return true;
+  },
 
   setOpen: (v) => set({ open: v }),
   setPanelHeight: (px) => set({ panelHeight: Math.max(160, Math.min(720, px)) }),
@@ -381,10 +467,13 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
     return id;
   },
 
-  deleteClip: (clipId) => set((s) => ({
-    clips: s.clips.filter((c) => c.id !== clipId),
-    selectedClipId: s.selectedClipId === clipId ? null : s.selectedClipId,
-  })),
+  deleteClip: (clipId) => {
+    get().captureUndoSnapshot('Delete MIDI clip');
+    set((s) => ({
+      clips: s.clips.filter((c) => c.id !== clipId),
+      selectedClipId: s.selectedClipId === clipId ? null : s.selectedClipId,
+    }));
+  },
 
   moveClip: (clipId, newStartSec) => set((s) => ({
     clips: s.clips.map((c) => (c.id === clipId ? { ...c, startSec: Math.max(0, newStartSec) } : c)),
@@ -394,9 +483,12 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
     clips: s.clips.map((c) => (c.id === clipId ? { ...c, lengthSec: Math.max(0.05, newLengthSec) } : c)),
   })),
 
-  clearClip: (clipId) => set((s) => ({
-    clips: s.clips.map((c) => (c.id === clipId ? { ...c, notes: [] } : c)),
-  })),
+  clearClip: (clipId) => {
+    get().captureUndoSnapshot('Clear notes');
+    set((s) => ({
+      clips: s.clips.map((c) => (c.id === clipId ? { ...c, notes: [] } : c)),
+    }));
+  },
 
   addNote: (clipId, note) => {
     const id = crypto.randomUUID();
@@ -418,13 +510,18 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
     return id;
   },
 
-  deleteNote: (clipId, noteId) => set((s) => ({
-    clips: s.clips.map((c) => (c.id === clipId
-      ? { ...c, notes: c.notes.filter((n) => n.id !== noteId) }
-      : c)),
-  })),
+  deleteNote: (clipId, noteId) => {
+    get().captureUndoSnapshot('Delete note');
+    set((s) => ({
+      clips: s.clips.map((c) => (c.id === clipId
+        ? { ...c, notes: c.notes.filter((n) => n.id !== noteId) }
+        : c)),
+    }));
+  },
 
   deleteNotes: (clipId, noteIds) => {
+    if (noteIds.length === 0) return;
+    get().captureUndoSnapshot(noteIds.length === 1 ? 'Delete note' : `Delete ${noteIds.length} notes`);
     const idSet = new Set(noteIds);
     set((s) => ({
       clips: s.clips.map((c) => (c.id === clipId
