@@ -179,8 +179,14 @@ export default function EffectChainEditor({ laneKey, embedded = false, emptyMess
       {/* Chain rail spans the whole panel — no separate identity column. */}
       <div className="flex-1 min-w-0 px-3 py-3 overflow-x-auto flex items-stretch gap-2">
         {/* Leading device (e.g. MIDI track Sampler) — sits before the
-            reorderable effects so the chain reads instrument → FX. */}
+            reorderable effects so the chain reads instrument → FX.
+            When there are effects after it, append the same "→" arrow
+            the effect-to-effect transitions use so the signal flow
+            reads consistently from left to right. */}
         {leading}
+        {leading && chain.length > 0 && (
+          <span className="shrink-0 self-center text-[14px] font-bold text-white/30 px-0.5 select-none">→</span>
+        )}
         <Reorder.Group
           axis="x"
           values={chain.map((e) => e.id)}
