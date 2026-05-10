@@ -500,13 +500,32 @@ export function ArrangementScrollView({ children, showAll }: { children: React.R
 export function useArrangement() {
   const projectBpm = useAudioStore((s) => s.projectBpm);
   const duration = useAudioStore((s) => s.duration);
+  // audioStore's `duration` only reflects loaded audio tracks. MIDI
+  // and drum clips live in sibling stores, so a clip dropped past the
+  // end of audio content wouldn't extend the ruler — bar markers
+  // would stop short of where the user could clearly see their clip.
+  // Pull both stores in and fold them into the max.
+  const midiClips = useMidiTrack((s) => s.clips);
+  const drumClips = useDrumRack((s) => s.clips);
   const bpm = projectBpm > 0 ? projectBpm : 120;
   const barSec = 240 / bpm;
-  // Round bar count up to cover the longest clip, then derive arrangementDur
-  // from exact bars. This keeps ruler tick positions (i / numBars) and clip
-  // positions (startOffset / arrangementDur) on the same denominator so
-  // clips land exactly on bar lines.
-  const numBars = Math.max(16, Math.ceil((duration || 0) / barSec));
+  let contentEnd = duration || 0;
+  for (const c of midiClips) {
+    const end = c.startSec + c.lengthSec;
+    if (end > contentEnd) contentEnd = end;
+  }
+  for (const c of drumClips) {
+    const end = c.startSec + c.lengthSec;
+    if (end > contentEnd) contentEnd = end;
+  }
+  // Always keep a generous headroom of empty bars past the last clip
+  // so the ruler reads as "infinite" — Ableton-style. The user can
+  // scroll right and find more grid to drop clips onto instead of
+  // hitting an abrupt end. 16 bars is enough that even a fast drag
+  // won't run off the visible grid in one motion.
+  const HEADROOM_BARS = 16;
+  const contentBars = Math.ceil(contentEnd / barSec);
+  const numBars = Math.max(16, contentBars + HEADROOM_BARS);
   const arrangementDur = numBars * barSec;
   return { bpm, barSec, arrangementDur, numBars };
 }
