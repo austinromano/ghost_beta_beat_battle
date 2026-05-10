@@ -31,7 +31,7 @@ import { getLaneReverbAnalyser } from '../../stores/audio/trackReverb';
 // parallelograms — each layer scales with `size`, opacity ties to
 // `mix`, and `decay` shifts the stack's total height.
 
-const ACCENT = '#E879F9';
+const ACCENT = '#a855f7';
 // Sized to match ChannelEqPanel + CompressorPanel + SamplerChainCard
 // so all four cards align in the chain rail. Width tuned so the
 // iso-stack visualization reads with the same room-y proportion as
@@ -71,16 +71,6 @@ export default function ReverbPanel({
 
   const { size, decay, mix, time, damping, width } = params;
   const dimmed = effect.bypassed ? 0.5 : 1;
-  // Preset name + navigator lives in the header now (next to the
-  // REVERB wordmark). Local UI state — not persisted yet since the
-  // ReverbParams model doesn't carry a preset id.
-  const presetList = ['Small Room', 'Medium Room', 'Hall', 'Large Hall', 'Cathedral', 'Plate', 'Spring'];
-  const [preset, setPreset] = useState('Large Hall');
-  const cyclePreset = (dir: 1 | -1) => {
-    const i = presetList.indexOf(preset);
-    const next = (i + dir + presetList.length) % presetList.length;
-    setPreset(presetList[next]);
-  };
 
   // Audio-reactive energy (0..1). Read RMS of the lane's pre-reverb
   // signal off the shared analyser, smooth it lightly, and pass it
@@ -122,8 +112,8 @@ export default function ReverbPanel({
       style={{
         width: PANEL_W,
         height: PANEL_H,
-        background: 'linear-gradient(180deg, #1A0F2E 0%, #100823 100%)',
-        border: '1px solid rgba(232, 121, 249, 0.22)',
+        background: 'rgba(15, 12, 32, 0.92)',
+        border: '1px solid rgba(168, 134, 255, 0.18)',
         boxShadow: '0 8px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)',
         opacity: dimmed,
         transition: 'opacity 120ms linear',
@@ -157,30 +147,15 @@ export default function ReverbPanel({
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); toggleBypass(laneKey, effect.id); }}
           title={effect.bypassed ? 'Enable' : 'Bypass'}
-          className="w-4 h-4 flex items-center justify-center rounded-full transition-colors hover:bg-white/10"
+          className="w-5 h-5 flex items-center justify-center rounded-full transition-colors hover:bg-white/10"
           style={{ color: effect.bypassed ? 'rgba(255,255,255,0.45)' : ACCENT }}
         >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
             <circle cx="12" cy="12" r="10" />
+            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
           </svg>
         </button>
-        <span className="text-[11px] font-bold tracking-[0.16em] ml-1" style={{ color: ACCENT }}>REVERB</span>
-        <span className="ml-3 text-[8.5px] font-bold tracking-[0.16em] uppercase text-white/45">Presets</span>
-        <span className="flex items-center gap-1 text-white/45">
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); cyclePreset(-1); }}
-            className="px-1 hover:text-white transition-colors leading-none"
-            title="Previous preset"
-          >‹</button>
-          <span className="text-[10.5px] font-semibold tracking-wide min-w-[78px] text-center" style={{ color: ACCENT }}>{preset}</span>
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); cyclePreset(1); }}
-            className="px-1 hover:text-white transition-colors leading-none"
-            title="Next preset"
-          >›</button>
-        </span>
+        <span className="text-[14px] font-semibold text-white/90 ml-1">Reverb</span>
         <span className="ml-auto" />
         {onClose && (
           <button
@@ -197,89 +172,79 @@ export default function ReverbPanel({
         )}
       </div>
 
-      <ReverbBody
-        laneKey={laneKey}
-        effect={effect}
-        params={params}
-        energy={energy}
-        setReverbParam={setReverbParam}
-        toggleBypass={toggleBypass}
-      />
-    </div>
-  );
-}
-
-// Body extracted so we can hold tiny pieces of local UI state
-// (pre-delay, preset name) without dragging them through to the
-// outer panel return. Layout mirrors the reference render: top
-// row = particle room visualizer (left) + SIZE/DECAY/WIDTH knob
-// stack (right); bottom row = MIX / TIME / DAMPING / PRE-DELAY
-// across the full width; footer = PRESETS / preset name / BYPASS.
-function ReverbBody({ laneKey, effect, params, energy, setReverbParam, toggleBypass }: {
-  laneKey: string;
-  effect: Effect;
-  params: ReverbParams;
-  energy: number;
-  setReverbParam: (laneKey: string, effectId: string, key: keyof ReverbParams, v: number) => void;
-  toggleBypass: (laneKey: string, effectId: string) => void;
-}) {
-  const { size, decay, mix, time, damping, width } = params;
-  // Pre-Delay is visual-only for now — the ReverbParams model doesn't
-  // have it yet. Held locally so the knob still drags and animates
-  // like a real param.
-  const [preDelay, setPreDelay] = useState(0.02); // 0..0.5 s
-  return (
-    <div className="flex flex-col" style={{ height: PANEL_H - 28 - 28 }}>
-      <div className="flex flex-1 min-h-0">
-        <div className="flex-1 min-w-0 flex px-1 pt-2 pb-1">
-          <ParticleRoom
-            size={size} decay={decay} mix={mix}
-            time={time} damping={damping} width={width}
-            energy={energy}
-          />
+      {/* Main area split: left column = particle visualizer +
+          MIX/TIME/DAMPING knob row; right column = SIZE/DECAY/WIDTH
+          vertical stack. Matches the reference render's clean
+          layout — no bottom toolbar, no preset navigator, no
+          pre-delay knob. */}
+      <div className="flex" style={{ height: PANEL_H - 36 }}>
+        <div className="flex flex-col flex-1 min-w-0">
+          <div className="flex px-1 pt-2 pb-1" style={{ height: 130 }}>
+            <ParticleRoom
+              size={size} decay={decay} mix={mix}
+              time={time} damping={damping} width={width}
+              energy={energy}
+            />
+          </div>
+          <div
+            className="flex items-center px-6 pt-1 pb-2 border-t"
+            style={{ borderColor: 'rgba(255,255,255,0.05)', flex: 1 }}
+          >
+            <div className="flex-1 flex justify-center min-w-0">
+              <Knob
+                compact
+                label="Mix"
+                valueLabel={formatPercent(mix)}
+                value={mix} min={0} max={1}
+                onChange={(v) => setReverbParam(laneKey, effect.id, 'mix', v)}
+              />
+            </div>
+            <div className="flex-1 flex justify-center min-w-0">
+              <Knob
+                compact
+                label="Time"
+                valueLabel={formatSeconds(time)}
+                value={time} min={0.1} max={10}
+                onChange={(v) => setReverbParam(laneKey, effect.id, 'time', v)}
+              />
+            </div>
+            <div className="flex-1 flex justify-center min-w-0">
+              <Knob
+                compact
+                label="Damping"
+                valueLabel={formatPercent(damping)}
+                value={damping} min={0} max={1}
+                onChange={(v) => setReverbParam(laneKey, effect.id, 'damping', v)}
+              />
+            </div>
+          </div>
         </div>
         <div
-          className="flex flex-col items-center justify-center gap-2 shrink-0 px-2 py-2 border-l"
+          className="flex flex-col items-center justify-center gap-3 shrink-0 px-2 py-2 border-l"
           style={{ width: 70, borderColor: 'rgba(255,255,255,0.05)' }}
         >
-          <Knob compact label="Size" valueLabel={formatPercent(size)} value={size} min={0} max={1}
-            onChange={(v) => setReverbParam(laneKey, effect.id, 'size', v)} />
-          <Knob compact label="Decay" valueLabel={formatPercent(decay)} value={decay} min={0} max={1}
-            onChange={(v) => setReverbParam(laneKey, effect.id, 'decay', v)} />
-          <Knob compact label="Width" valueLabel={formatPercent(width)} value={width} min={0} max={1}
-            onChange={(v) => setReverbParam(laneKey, effect.id, 'width', v)} />
+          <Knob
+            compact
+            label="Size"
+            valueLabel={formatPercent(size)}
+            value={size} min={0} max={1}
+            onChange={(v) => setReverbParam(laneKey, effect.id, 'size', v)}
+          />
+          <Knob
+            compact
+            label="Decay"
+            valueLabel={formatPercent(decay)}
+            value={decay} min={0} max={1}
+            onChange={(v) => setReverbParam(laneKey, effect.id, 'decay', v)}
+          />
+          <Knob
+            compact
+            label="Width"
+            valueLabel={formatPercent(width)}
+            value={width} min={0} max={1}
+            onChange={(v) => setReverbParam(laneKey, effect.id, 'width', v)}
+          />
         </div>
-      </div>
-      <div
-        className="grid grid-cols-4 items-center px-3 py-1 border-t"
-        style={{ borderColor: 'rgba(255,255,255,0.05)', height: 84 }}
-      >
-        <div className="flex justify-center"><Knob compact label="Mix" valueLabel={formatPercent(mix)} value={mix} min={0} max={1}
-          onChange={(v) => setReverbParam(laneKey, effect.id, 'mix', v)} /></div>
-        <div className="flex justify-center"><Knob compact label="Time" valueLabel={formatSeconds(time)} value={time} min={0.1} max={10}
-          onChange={(v) => setReverbParam(laneKey, effect.id, 'time', v)} /></div>
-        <div className="flex justify-center"><Knob compact label="Damping" valueLabel={formatPercent(damping)} value={damping} min={0} max={1}
-          onChange={(v) => setReverbParam(laneKey, effect.id, 'damping', v)} /></div>
-        <div className="flex justify-center"><Knob compact label="Pre-Delay" valueLabel={`${Math.round(preDelay * 1000)} ms`} value={preDelay} min={0} max={0.5}
-          onChange={setPreDelay} /></div>
-      </div>
-      <div
-        className="flex items-center gap-3 px-3 border-t"
-        style={{ height: 28, borderColor: 'rgba(255,255,255,0.06)' }}
-      >
-        <span className="ml-auto" />
-        <button
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); toggleBypass(laneKey, effect.id); }}
-          className="px-2 py-0.5 rounded text-[9.5px] font-bold tracking-wider uppercase transition-colors"
-          style={{
-            background: effect.bypassed ? 'rgba(255,255,255,0.06)' : 'rgba(232,121,249,0.18)',
-            color: effect.bypassed ? 'rgba(255,255,255,0.55)' : ACCENT,
-            border: `1px solid ${effect.bypassed ? 'rgba(255,255,255,0.10)' : 'rgba(232,121,249,0.40)'}`,
-          }}
-        >
-          Bypass
-        </button>
       </div>
     </div>
   );
