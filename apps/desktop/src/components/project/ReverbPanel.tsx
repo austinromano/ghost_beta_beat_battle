@@ -32,11 +32,12 @@ import { getLaneReverbAnalyser } from '../../stores/audio/trackReverb';
 // `mix`, and `decay` shifts the stack's total height.
 
 const ACCENT = '#a855f7';
-// Sized to match ChannelEqPanel + CompressorPanel so all three plugins
-// align in the chain rail. Width tuned so the iso-stack visualization
-// reads with the same room-y proportion as the reference image.
+// Sized to match ChannelEqPanel + CompressorPanel + SamplerChainCard
+// so all four cards align in the chain rail. Width tuned so the
+// iso-stack visualization reads with the same room-y proportion as
+// the reference image.
 const PANEL_W = 500;
-const PANEL_H = 252;
+const PANEL_H = 296;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));

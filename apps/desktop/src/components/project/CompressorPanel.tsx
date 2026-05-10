@@ -334,10 +334,10 @@ export default function CompressorPanel({
       className="rounded-xl select-none"
       style={{
         width: PANEL_W,
-        // Locked to the same pixel height as ChannelEqPanel so the two
-        // panels stay aligned in the chain rail regardless of how
-        // their content sizes individually.
-        height: 252,
+        // Locked to the same pixel height as ChannelEqPanel /
+        // ReverbPanel / SamplerChainCard so every device in the chain
+        // rail lines up regardless of how its content sizes.
+        height: 296,
         background: 'rgba(15, 12, 32, 0.92)',
         border: '1px solid rgba(168, 134, 255, 0.18)',
         boxShadow: '0 8px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)',

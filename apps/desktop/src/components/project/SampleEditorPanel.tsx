@@ -301,6 +301,7 @@ function DrumRackFxView() {
 // when there are several. The Sampler device sits ABOVE the effect
 // chain — Ableton-style: instrument first, FX inserts after.
 function MidiTrackFxView({ trackName, laneKey }: { trackName: string; laneKey: string }) {
+  void trackName;
   const projectId = useProjectStore((s) => s.currentProject?.id);
   // The Sampler is opt-in per track. Only render its chain card when
   // the user has explicitly added one — i.e. an instrument record
@@ -391,9 +392,6 @@ function MidiTrackFxView({ trackName, laneKey }: { trackName: string; laneKey: s
       onDragEnter={onPanelDragOver}
       onDrop={onPanelDrop}
     >
-      <div className="px-3 py-1 text-[10.5px] font-bold tracking-[0.15em] uppercase text-purple-300/80">
-        {trackName} FX
-      </div>
       <EffectChainEditor
         laneKey={laneKey}
         emptyMessage={hasInstrument
