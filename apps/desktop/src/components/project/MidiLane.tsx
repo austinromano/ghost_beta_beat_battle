@@ -270,6 +270,15 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
 
   const deleteMidiTrack = async () => {
     if (!window.confirm(`Delete the MIDI track "${track.name || 'MIDI'}"? This removes the track and every clip on it.`)) return;
+    // Capture for undo BEFORE we mutate anything — the snapshot needs
+    // to see the instrument config + clips that are about to be
+    // wiped. undoMidi() will recreate the track via the API and
+    // re-key these back into the store under the new server id.
+    useMidiTrack.getState().captureTrackDeleteSnapshot({
+      projectId,
+      trackId,
+      trackName: track.name || 'MIDI',
+    });
     // Tear down MIDI-store state for this track BEFORE the project
     // refresh — clips and instrument are keyed by trackId, and once
     // the server-side track row is gone there's nothing to anchor

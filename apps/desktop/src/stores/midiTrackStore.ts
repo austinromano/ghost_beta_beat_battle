@@ -5,6 +5,7 @@ import { useAudioStore, getStartedAt } from './audioStore';
 import { sendSessionAction } from '../lib/socket';
 import { pitchShiftRatio, clampPitch, clampVelocity } from '../lib/midiSchedule';
 import { getMidiTrackBus } from './audio/midiFxBus';
+import { api } from '../lib/api';
 
 // MIDI track / piano-roll store.
 //
@@ -128,15 +129,15 @@ interface MidiTrackState {
   transposeNotes: (clipId: string, noteIds: string[], semitones: number) => void;
 
   // Undo / redo — captures clips + instruments snapshots before
-  // destructive ops (delete clip / delete note / delete track).
-  // captureUndoSnapshot is a public hook for paths that mutate the
-  // store directly (e.g. the lane's track-delete) without going
-  // through one of the typed actions above.
+  // destructive ops (delete clip / delete note / clear clip), and a
+  // separate command-style entry for whole-track deletes (which need
+  // a server-side recreate to undo).
   canUndoMidi: boolean;
   canRedoMidi: boolean;
   lastMidiUndoTs: number;
   captureUndoSnapshot: (label: string) => void;
-  undoMidi: () => boolean;
+  captureTrackDeleteSnapshot: (args: { projectId: string; trackId: string; trackName: string }) => void;
+  undoMidi: () => Promise<boolean>;
   redoMidi: () => boolean;
 
   // Scheduler
@@ -153,21 +154,40 @@ interface MidiTrackState {
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 const activeSources: Set<AudioBufferSourceNode> = new Set();
 
-// Undo / redo state. Snapshots store `clips` + `instruments` so any
-// destructive action (delete clip, delete note, delete whole track)
-// can be reversed. Capped at MAX_UNDO entries so a long session can't
-// balloon localStorage / memory; oldest entries fall off the front.
-interface MidiUndoSnapshot {
+// Undo / redo state. Most entries are full state snapshots that any
+// destructive action (delete clip, delete note, clear clip) restores
+// in one shot. Whole-track deletes can't be reversed by a state
+// snapshot alone — the project track row was deleted server-side and
+// re-fetching the project would clobber any local restore. Those use
+// a dedicated `track-delete` entry that recreates the track via the
+// API on undo and re-keys the captured clips/instrument to the new
+// id.
+interface MidiStateSnapshot {
+  kind: 'state';
   clips: MidiClip[];
   instruments: Record<string, MidiInstrument>;
   selectedClipId: string | null;
   label: string;
   ts: number;
 }
-const midiUndoStack: MidiUndoSnapshot[] = [];
-const midiRedoStack: MidiUndoSnapshot[] = [];
+interface MidiTrackDeleteSnapshot {
+  kind: 'track-delete';
+  projectId: string;
+  trackName: string;
+  // Captured BEFORE the lane mutates the store, so they include the
+  // user's instrument config (sample, ADSR, baseNote, ...) and every
+  // clip with notes for the doomed trackId.
+  instrument: MidiInstrument | null;
+  clips: MidiClip[];
+  label: string;
+  ts: number;
+}
+type MidiUndoEntry = MidiStateSnapshot | MidiTrackDeleteSnapshot;
+
+const midiUndoStack: MidiUndoEntry[] = [];
+const midiRedoStack: MidiUndoEntry[] = [];
 const MAX_UNDO = 50;
-function snapshotState(label: string): MidiUndoSnapshot {
+function snapshotState(label: string): MidiStateSnapshot {
   const s = useMidiTrack.getState();
   // Deep-clone clips so future mutations don't bleed into the
   // snapshot. Instruments share buffer references — buffers are
@@ -178,7 +198,7 @@ function snapshotState(label: string): MidiUndoSnapshot {
   }));
   const instruments: Record<string, MidiInstrument> = {};
   for (const [k, v] of Object.entries(s.instruments)) instruments[k] = { ...v };
-  return { clips, instruments, selectedClipId: s.selectedClipId, label, ts: Date.now() };
+  return { kind: 'state', clips, instruments, selectedClipId: s.selectedClipId, label, ts: Date.now() };
 }
 // Voice tracking per track for the polyphony cap. Each track gets a
 // circular buffer of currently-playing sources; once it hits the cap
@@ -310,27 +330,102 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
     set({ canUndoMidi: true, canRedoMidi: false, lastMidiUndoTs: Date.now() });
   },
 
-  undoMidi: () => {
-    if (midiUndoStack.length === 0) return false;
-    const snap = midiUndoStack.pop()!;
-    // Push current state onto redo so a follow-up redo restores
-    // the just-undone destructive change.
-    midiRedoStack.push(snapshotState(`Redo: ${snap.label}`));
-    if (midiRedoStack.length > MAX_UNDO) midiRedoStack.shift();
-    set({
-      clips: snap.clips,
-      instruments: snap.instruments,
-      selectedClipId: snap.selectedClipId,
-      canUndoMidi: midiUndoStack.length > 0,
-      canRedoMidi: true,
-      lastMidiUndoTs: Date.now(),
+  captureTrackDeleteSnapshot: ({ projectId, trackId, trackName }) => {
+    if (_applyingRemote || _hydrating) return;
+    const s = useMidiTrack.getState();
+    const inst = s.instruments[trackId];
+    const instrument = inst ? { ...inst } : null;
+    const clips = s.clips
+      .filter((c) => c.trackId === trackId)
+      .map((c) => ({ ...c, notes: c.notes.map((n) => ({ ...n })) }));
+    midiUndoStack.push({
+      kind: 'track-delete',
+      projectId,
+      trackName,
+      instrument,
+      clips,
+      label: `Delete track "${trackName}"`,
+      ts: Date.now(),
     });
-    return true;
+    if (midiUndoStack.length > MAX_UNDO) midiUndoStack.shift();
+    midiRedoStack.length = 0;
+    set({ canUndoMidi: true, canRedoMidi: false, lastMidiUndoTs: Date.now() });
+  },
+
+  undoMidi: async () => {
+    if (midiUndoStack.length === 0) return false;
+    const entry = midiUndoStack.pop()!;
+
+    if (entry.kind === 'state') {
+      // Plain state snapshot — restore in one shot and push the
+      // current state onto the redo stack so the user can redo.
+      midiRedoStack.push(snapshotState(`Redo: ${entry.label}`));
+      if (midiRedoStack.length > MAX_UNDO) midiRedoStack.shift();
+      set({
+        clips: entry.clips,
+        instruments: entry.instruments,
+        selectedClipId: entry.selectedClipId,
+        canUndoMidi: midiUndoStack.length > 0,
+        canRedoMidi: true,
+        lastMidiUndoTs: Date.now(),
+      });
+      return true;
+    }
+
+    // Track-delete recovery — recreate the track on the server, then
+    // re-key the captured clips/instrument under the new track id.
+    // Server-issued ids are random so the restored row gets a new id;
+    // we update local store state to match before refreshing the
+    // project so MidiLane sees both the new track row AND its
+    // restored clips on the same render pass.
+    try {
+      const result: any = await api.addTrack(entry.projectId, { name: entry.trackName, type: 'midi' as any } as any);
+      const newId: string | undefined = result?.id;
+      if (!newId) throw new Error('addTrack returned no id');
+
+      const cur = get();
+      const nextInstruments = { ...cur.instruments };
+      if (entry.instrument) {
+        nextInstruments[newId] = { ...entry.instrument };
+      }
+      // Re-key clips to the new track id so the lane lookup
+      // (clips.filter(c => c.trackId === trackId)) finds them.
+      const restoredClips = entry.clips.map((c) => ({
+        ...c,
+        trackId: newId,
+        notes: c.notes.map((n) => ({ ...n })),
+      }));
+
+      set({
+        instruments: nextInstruments,
+        clips: [...cur.clips, ...restoredClips],
+        canUndoMidi: midiUndoStack.length > 0,
+        // Track-delete undo doesn't push a redo — the user can just
+        // right-click the restored lane to delete it again, which
+        // creates a fresh undo entry.
+        canRedoMidi: midiRedoStack.length > 0,
+        lastMidiUndoTs: Date.now(),
+      });
+      // Refresh so the new project track row appears in the lane list.
+      window.dispatchEvent(new CustomEvent('ghost-refresh-project'));
+      return true;
+    } catch (err) {
+      // Server error — push the entry back so the user can retry.
+      midiUndoStack.push(entry);
+      set({ canUndoMidi: true });
+      if (typeof console !== 'undefined') console.warn('[midiTrackStore] undo track-delete failed:', err);
+      return false;
+    }
   },
 
   redoMidi: () => {
     if (midiRedoStack.length === 0) return false;
     const snap = midiRedoStack.pop()!;
+    if (snap.kind !== 'state') {
+      // Track-delete entries don't go through redo — drop silently.
+      set({ canRedoMidi: midiRedoStack.length > 0 });
+      return false;
+    }
     midiUndoStack.push(snapshotState(`Undo: ${snap.label}`));
     if (midiUndoStack.length > MAX_UNDO) midiUndoStack.shift();
     set({
