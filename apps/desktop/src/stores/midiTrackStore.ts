@@ -1025,21 +1025,24 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
   },
 }));
 
-// Bar-lock MIDI clip positions when the project tempo changes. Same
+// Re-snap MIDI clip positions when the project tempo changes. Same
 // `ghost-bpm-rescale` event the drum rack listens for — every clip's
-// startSec / lengthSec scale by the BPM ratio and re-snap to the new bar
-// grid so multiple tempo changes don't accumulate drift.
+// startSec / lengthSec scale by the BPM ratio. We snap at 16th-note
+// resolution (1/16 of a bar) instead of whole-bar resolution: MIDI
+// clips can be placed at beat positions and arbitrary lengths, so a
+// bar-snap shoves them off their original musical position. A 16th
+// is fine enough to round-trip any reasonable placement while still
+// catching the floating-point drift that accumulates over many
+// tempo changes. Notes inside the clip just scale by `scale` (they
+// preserve their sub-step timing precisely).
 function snapClipsToProjectGrid(scale = 1) {
   const newBpm = useAudioStore.getState().projectBpm || 120;
   const newBarSec = 240 / newBpm;
+  const snapStep = newBarSec / 16;
   useMidiTrack.setState((s) => ({
     clips: s.clips.map((c) => {
       const scaledStart = c.startSec * scale;
       const scaledLen = c.lengthSec * scale;
-      // Notes scale within the clip — they're stored relative to the
-      // clip start, so when the clip stretches, every note's startSec
-      // and durationSec scale by the same factor to stay musically
-      // aligned with the bar grid.
       const notes = c.notes.map((n) => ({
         ...n,
         startSec: n.startSec * scale,
@@ -1047,8 +1050,8 @@ function snapClipsToProjectGrid(scale = 1) {
       }));
       return {
         ...c,
-        startSec: Math.max(0, Math.round(scaledStart / newBarSec) * newBarSec),
-        lengthSec: Math.max(newBarSec, Math.round(scaledLen / newBarSec) * newBarSec),
+        startSec: Math.max(0, Math.round(scaledStart / snapStep) * snapStep),
+        lengthSec: Math.max(snapStep, Math.round(scaledLen / snapStep) * snapStep),
         notes,
       };
     }),
