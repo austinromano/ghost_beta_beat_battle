@@ -143,6 +143,7 @@ export default function Sampler({ projectId }: Props) {
         setInstrumentVolume={setInstrumentVolume}
         setSamplerRange={setSamplerRange}
         setSamplerEnvelope={setSamplerEnvelope}
+        hideKeyboard
       />
     </div>
   );
@@ -181,7 +182,7 @@ function SamplerHeader({ trackName, instrumentName, onClose, onPointerDown }: {
   );
 }
 
-function SamplerBody({ projectId, trackId, inst, ensureInstrument, setInstrument, setBaseNote, setInstrumentVolume, setSamplerRange, setSamplerEnvelope }: {
+function SamplerBody({ projectId, trackId, inst, ensureInstrument, setInstrument, setBaseNote, setInstrumentVolume, setSamplerRange, setSamplerEnvelope, hideKeyboard }: {
   projectId: string;
   trackId: string;
   inst: ReturnType<typeof useMidiTrack.getState>['instruments'][string] | undefined;
@@ -191,6 +192,7 @@ function SamplerBody({ projectId, trackId, inst, ensureInstrument, setInstrument
   setInstrumentVolume: (trackId: string, v: number) => void;
   setSamplerRange: (trackId: string, startOffset: number, endOffset: number) => void;
   setSamplerEnvelope: (trackId: string, env: Partial<{ attackSec: number; decaySec: number; sustainLevel: number; releaseSec: number }>) => void;
+  hideKeyboard?: boolean;
 }) {
   const onSampleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
@@ -254,8 +256,37 @@ function SamplerBody({ projectId, trackId, inst, ensureInstrument, setInstrument
         setInstrumentVolume={setInstrumentVolume}
         setSamplerEnvelope={setSamplerEnvelope}
       />
-      <SamplerKeyboardStrip inst={inst} trackId={trackId} />
+      {!hideKeyboard && <SamplerKeyboardStrip inst={inst} trackId={trackId} />}
     </div>
+  );
+}
+
+// Embeddable variant of the Sampler — pulls store hooks itself so a
+// caller (e.g. the MIDI FX chain rail) can drop in `<EmbeddedSampler
+// trackId=… />` without wiring every setter. Hides the on-panel
+// keyboard strip by default since the inline use case is meant for a
+// device-chain row, not a standalone preview surface.
+export function EmbeddedSampler({ projectId, trackId }: { projectId: string; trackId: string }) {
+  const inst = useMidiTrack((s) => s.instruments[trackId]);
+  const ensureInstrument = useMidiTrack((s) => s.ensureInstrument);
+  const setInstrument = useMidiTrack((s) => s.setInstrument);
+  const setBaseNote = useMidiTrack((s) => s.setBaseNote);
+  const setInstrumentVolume = useMidiTrack((s) => s.setInstrumentVolume);
+  const setSamplerRange = useMidiTrack((s) => s.setSamplerRange);
+  const setSamplerEnvelope = useMidiTrack((s) => s.setSamplerEnvelope);
+  return (
+    <SamplerBody
+      projectId={projectId}
+      trackId={trackId}
+      inst={inst}
+      ensureInstrument={ensureInstrument}
+      setInstrument={setInstrument}
+      setBaseNote={setBaseNote}
+      setInstrumentVolume={setInstrumentVolume}
+      setSamplerRange={setSamplerRange}
+      setSamplerEnvelope={setSamplerEnvelope}
+      hideKeyboard
+    />
   );
 }
 

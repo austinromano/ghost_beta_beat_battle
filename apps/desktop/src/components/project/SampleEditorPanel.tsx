@@ -6,11 +6,7 @@ import { samplePreview } from '../../lib/samplePreview';
 import EffectChainEditor from './EffectChainEditor';
 import { DRUM_RACK_FX_KEY, MASTER_FX_KEY, laneKeyOf, useEffectsStore } from '../../stores/effectsStore';
 import { useMidiTrack } from '../../stores/midiTrackStore';
-import { audioBufferCache, getAudioData } from '../../lib/audio';
-import { api } from '../../lib/api';
-import { getCtx } from '../../stores/audio/graph';
-import { INSTRUMENT_DRAG_MIME } from '../instruments/InstrumentsSection';
-import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
+import { EmbeddedSampler } from '../instruments/Sampler';
 
 // Bottom sample editor / clip inspector. Mounts at the bottom of the
 // arrangement view; shows when exactly one clip is selected. Big waveform,
@@ -315,121 +311,29 @@ function MidiTrackFxView({ trackName, laneKey }: { trackName: string; laneKey: s
 }
 
 // Sampler device card rendered as the first device in a MIDI track's
-// chain — Ableton-style. Sits inline with the EQ/Comp/Reverb cards so
-// the user reads the chain left-to-right: Sampler → effects. Drop
-// targets:
-//   - INSTRUMENT_DRAG_MIME (sampler tile from the sidebar) → seeds an
-//     empty instrument record + pops the sampler editor
-//   - OS file / sample-library / project-file drops → loads the
-//     sample into the instrument directly
-// Same drop logic as the lane header so the user can drop in either
-// place; this one just lives inside the FX panel where the chain is.
+// chain — Ableton-style. Renders the actual Sampler controls inline
+// (waveform, sample-window handles, volume / base-note / ADSR) so the
+// user can edit the patch without popping a floating panel. Sample
+// drops are handled by the embedded Sampler itself.
 function SamplerChainCard({ trackId }: { trackId: string }) {
   const projectId = useProjectStore((s) => s.currentProject?.id);
-  const instrument = useMidiTrack((s) => s.instruments[trackId]);
-  const ensureInstrument = useMidiTrack((s) => s.ensureInstrument);
-  const setInstrument = useMidiTrack((s) => s.setInstrument);
-  const openSampler = useMidiTrack((s) => s.openSampler);
-  const [dragOver, setDragOver] = useState(false);
-
-  const acceptDrag = (dt: DataTransfer) => (
-    !!dt.files?.length
-    || dt.types.includes(SAMPLE_LIBRARY_DRAG_MIME)
-    || dt.types.includes('application/x-ghost-projectfile')
-    || dt.types.includes(INSTRUMENT_DRAG_MIME)
-  );
-  const onDragOver = (e: React.DragEvent) => {
-    if (!acceptDrag(e.dataTransfer)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-    if (!dragOver) setDragOver(true);
-  };
-  const onDragLeave = () => setDragOver(false);
-  const onDrop = async (e: React.DragEvent) => {
-    if (!acceptDrag(e.dataTransfer)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
-    if (!projectId) return;
-
-    const instRaw = e.dataTransfer.getData(INSTRUMENT_DRAG_MIME);
-    if (instRaw) {
-      try {
-        const payload = JSON.parse(instRaw) as { kind: string };
-        if (payload?.kind === 'sampler') {
-          ensureInstrument(trackId);
-          openSampler(trackId);
-          return;
-        }
-      } catch { /* malformed — fall through */ }
-    }
-    const file = e.dataTransfer.files?.[0];
-    if (file && /audio|wav|mp3|flac|aiff|ogg|m4a|aac/i.test(file.type + file.name)) {
-      try {
-        const arr = await file.arrayBuffer();
-        const buffer = await getCtx().decodeAudioData(arr.slice(0));
-        const name = file.name.replace(/\.[^.]+$/, '');
-        const { fileId } = await api.uploadFile(projectId, file);
-        ensureInstrument(trackId);
-        setInstrument(trackId, name, buffer, fileId);
-      } catch { /* user can retry */ }
-      return;
-    }
-    const libRaw = e.dataTransfer.getData(SAMPLE_LIBRARY_DRAG_MIME);
-    if (libRaw) {
-      try {
-        const lib = JSON.parse(libRaw) as { id: string; name: string };
-        const arr = await api.downloadSampleLibraryAudio(lib.id);
-        const buffer = await getCtx().decodeAudioData(arr.slice(0));
-        const name = lib.name.replace(/\.[^.]+$/, '');
-        const ext = lib.name.match(/\.[a-z0-9]+$/i)?.[0] || '.wav';
-        const fileName = lib.name.endsWith(ext) ? lib.name : `${name}${ext}`;
-        const fakeFile = new File([arr], fileName, { type: 'audio/wav' });
-        const { fileId } = await api.uploadFile(projectId, fakeFile);
-        ensureInstrument(trackId);
-        setInstrument(trackId, name, buffer, fileId);
-      } catch { /* user can retry */ }
-      return;
-    }
-    const projRaw = e.dataTransfer.getData('application/x-ghost-projectfile');
-    if (projRaw) {
-      try {
-        const meta = JSON.parse(projRaw) as { id: string; name: string };
-        const cached = audioBufferCache.get(meta.id);
-        const buffer = cached ?? (await getAudioData(projectId, meta.id)).buffer;
-        ensureInstrument(trackId);
-        setInstrument(trackId, meta.name.replace(/\.[^.]+$/, ''), buffer, meta.id);
-      } catch { /* ignore */ }
-    }
-  };
-
-  const hasSample = !!(instrument?.fileId || instrument?.buffer);
-  const sampleName = instrument?.name || 'Empty';
-
+  if (!projectId) return null;
   return (
     <div
-      onDragOver={onDragOver}
-      onDragEnter={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      onClick={() => { ensureInstrument(trackId); openSampler(trackId); }}
-      className="shrink-0 cursor-pointer rounded-xl flex flex-col overflow-hidden transition-colors"
+      className="shrink-0 rounded-xl flex flex-col overflow-hidden"
       style={{
-        // Match the EQ/Comp/Reverb chain cards' size so the device
-        // chain reads as one rail. 252 px tall matches the trailing
-        // drop slot height inside EffectChainEditor.
-        width: 220,
+        // Wider than an FX card so the waveform + control row fit
+        // without horizontal scroll. Height matches the trailing drop
+        // slot so the rail reads as one row.
+        width: 560,
         height: 252,
-        background: dragOver ? 'rgba(168,85,247,0.18)' : 'linear-gradient(180deg, rgba(124,58,237,0.18) 0%, rgba(124,58,237,0.08) 100%)',
-        border: dragOver ? '2px dashed rgba(168,85,247,0.85)' : '1px solid rgba(168,85,247,0.35)',
+        background: 'linear-gradient(180deg, rgba(124,58,237,0.16) 0%, rgba(124,58,237,0.06) 100%)',
+        border: '1px solid rgba(168,85,247,0.35)',
         boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
       }}
-      title={hasSample
-        ? `Sampler · ${sampleName} — click to edit, drop a sample to replace`
-        : 'Drag a Sampler from the Instruments sidebar, or drop a sample directly'}
     >
-      {/* Header strip — matches EQ/Comp panels' top bar style. */}
+      {/* Header strip — labels the device. The body below is the
+          actual Sampler UI; controls work inline. */}
       <div
         className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5"
         style={{ background: 'rgba(168,85,247,0.25)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
@@ -440,40 +344,12 @@ function SamplerChainCard({ trackId }: { trackId: string }) {
         <span className="text-[10.5px] font-bold tracking-[0.12em] uppercase text-white">Sampler</span>
         <span className="ml-auto text-[8.5px] font-mono text-white/40 uppercase tracking-wider">Inst</span>
       </div>
-      {/* Body — sample slot. Big drop affordance when empty, name +
-          tiny waveform-ish glyph when loaded. */}
-      <div className="flex-1 flex flex-col items-center justify-center gap-2 px-3 text-center">
-        {hasSample ? (
-          <>
-            <div
-              className="w-12 h-12 rounded-full flex items-center justify-center"
-              style={{ background: 'rgba(168,85,247,0.3)', border: '1px solid rgba(168,85,247,0.55)' }}
-            >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12h2l3-9 4 18 3-9h6" />
-              </svg>
-            </div>
-            <div className="text-[11.5px] font-medium text-white/90 truncate w-full">{sampleName}</div>
-            <div className="text-[9.5px] uppercase tracking-wider text-purple-300/70">Click to edit</div>
-          </>
-        ) : (
-          <>
-            <div
-              className="w-12 h-12 rounded-full flex items-center justify-center"
-              style={{ background: 'rgba(255,255,255,0.04)', border: '1.5px dashed rgba(168,85,247,0.4)' }}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(168,134,255,0.85)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-            </div>
-            <div className="text-[11px] text-white/55 italic leading-snug">Drop a sample or<br/>drag the Sampler here</div>
-          </>
-        )}
+      {/* Body — actual Sampler UI inline. EmbeddedSampler hides its
+          own preview keyboard since the chain row is for editing the
+          patch, not previewing it. */}
+      <div className="flex-1 min-h-0">
+        <EmbeddedSampler projectId={projectId} trackId={trackId} />
       </div>
-      {/* Footer arrow — points into the rest of the chain so the user
-          reads the signal flow left-to-right. */}
-      <div className="shrink-0 flex items-center justify-end px-2 py-1 text-[12px] text-white/30">→</div>
     </div>
   );
 }
