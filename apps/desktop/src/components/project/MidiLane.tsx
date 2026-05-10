@@ -9,6 +9,7 @@ import { api } from '../../lib/api';
 import { getCtx } from '../../stores/audio/graph';
 import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
 import MidiClipBlock, { MIDI_CLIP_DRAG_MIME } from './MidiClipBlock';
+import { MIDI_LIBRARY_DRAG_MIME, getMidiLibraryEntry } from '../../lib/midiLibrary';
 import { INSTRUMENT_DRAG_MIME } from '../instruments/InstrumentsSection';
 import { useEffectsStore, EFFECT_DRAG_MIME, type EffectKind } from '../../stores/effectsStore';
 
@@ -223,20 +224,62 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
   };
 
   // ---- MIDI clip drag-drop onto this lane --------------------------
+  // Accepts two kinds of drags:
+  //   - MIDI_CLIP_DRAG_MIME: an existing clip from another lane gets
+  //     moved here (its trackId is retargeted)
+  //   - MIDI_LIBRARY_DRAG_MIME: a saved clip from the sidebar's MIDI
+  //     Library — looked up in localStorage, converted from bar-
+  //     relative units back to seconds at the project's current
+  //     BPM, and inserted as a brand-new clip on this lane.
   const [clipDragOver, setClipDragOver] = useState(false);
+  const acceptsClipDrag = (dt: DataTransfer) => (
+    dt.types.includes(MIDI_CLIP_DRAG_MIME)
+    || dt.types.includes(MIDI_LIBRARY_DRAG_MIME)
+  );
   const onClipLaneDragOver = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes(MIDI_CLIP_DRAG_MIME)) return;
+    if (!acceptsClipDrag(e.dataTransfer)) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+    e.dataTransfer.dropEffect = e.dataTransfer.types.includes(MIDI_LIBRARY_DRAG_MIME) ? 'copy' : 'move';
     if (!clipDragOver) setClipDragOver(true);
   };
   const onClipLaneDragLeave = () => setClipDragOver(false);
   const onClipLaneDrop = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes(MIDI_CLIP_DRAG_MIME)) return;
+    if (!acceptsClipDrag(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     setClipDragOver(false);
     try {
+      // Library drop: spawn a fresh clip on this lane at the drop time.
+      const libRaw = e.dataTransfer.getData(MIDI_LIBRARY_DRAG_MIME);
+      if (libRaw) {
+        const payload = JSON.parse(libRaw) as { id: string };
+        const entry = payload?.id ? getMidiLibraryEntry(payload.id) : null;
+        if (!entry) return;
+        const t = Math.max(0, snapTime(xToTime(e.clientX)));
+        const lengthSec = Math.max(barSec, entry.lengthBars * barSec);
+        const clipId = createClipAt(trackId, t, lengthSec);
+        // Convert the saved bar-relative notes back to seconds at the
+        // project's current BPM so cross-BPM saves still hit the
+        // right beat positions.
+        useMidiTrack.setState((s) => ({
+          clips: s.clips.map((c) => {
+            if (c.id !== clipId) return c;
+            return {
+              ...c,
+              notes: entry.notes.map((n) => ({
+                id: crypto.randomUUID(),
+                pitch: n.pitch,
+                startSec: n.startBars * barSec,
+                durationSec: Math.max(0.01, n.durationBars * barSec),
+                velocity: n.velocity,
+              })),
+            };
+          }),
+        }));
+        selectClip(clipId);
+        setOpen(true);
+        return;
+      }
       const raw = e.dataTransfer.getData(MIDI_CLIP_DRAG_MIME);
       const payload = JSON.parse(raw) as { clipId: string };
       if (!payload?.clipId) return;

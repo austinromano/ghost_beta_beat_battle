@@ -6,6 +6,7 @@ import { useAudioStore } from '../../stores/audioStore';
 import { ROOMS as COMMUNITY_ROOMS } from '../social/CommunityRooms';
 import { useCommunityStore } from '../../stores/communityStore';
 import SampleLibrarySection from './SampleLibrarySection';
+import MidiLibrarySection from './MidiLibrarySection';
 import UserVoiceBar from './UserVoiceBar';
 import EffectsSection from './EffectsSection';
 import InstrumentsSection from '../instruments/InstrumentsSection';
@@ -461,6 +462,7 @@ function ProjectListSidebar({
           <EffectsSection />
           <InstrumentsSection />
           <SampleLibrarySection />
+          <MidiLibrarySection />
         </Reorder.Item>
           );
           return null;

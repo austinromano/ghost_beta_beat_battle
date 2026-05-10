@@ -12,6 +12,7 @@ import PianoRollNote from './PianoRollNote';
 import VelocityLane from './VelocityLane';
 import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
 import { DRUM_RACK_FX_KEY } from '../../stores/effectsStore';
+import { saveMidiLibraryEntry } from '../../lib/midiLibrary';
 
 // Piano-roll panel — FL-Studio styled. Sits at the bottom of the
 // arrangement column, parallel to DrumRackPanel. v1 manages its own
@@ -1035,6 +1036,41 @@ export default function PianoRollPanel({ projectId }: Props) {
               <path d="M3 11V9a4 4 0 0 1 4-4h14" />
               <polyline points="7 23 3 19 7 15" />
               <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+          </button>
+          {/* Save to MIDI Library — converts the active clip's notes
+              to bar-relative units (so cross-BPM drops still hit the
+              right beat positions) and stashes them in localStorage.
+              The MidiLibrarySection in the sidebar picks the entry
+              up via a `ghost-midi-library-changed` event. */}
+          <button
+            onClick={() => {
+              if (!selectedClip) return;
+              const defaultName = trackName ? `${trackName} clip` : 'MIDI clip';
+              const name = window.prompt('Save to MIDI Library — name?', defaultName);
+              if (!name || !name.trim()) return;
+              const clipBars = barSec > 0 ? selectedClip.lengthSec / barSec : 1;
+              const notes = selectedClip.notes.map((n) => ({
+                pitch: n.pitch,
+                startBars: barSec > 0 ? n.startSec / barSec : 0,
+                durationBars: barSec > 0 ? n.durationSec / barSec : 0.25,
+                velocity: n.velocity,
+              }));
+              saveMidiLibraryEntry({ name: name.trim(), notes, lengthBars: clipBars });
+            }}
+            disabled={!selectedClip}
+            title="Save the current clip to your MIDI Library (sidebar) — drag from there onto any MIDI lane"
+            className="flex items-center justify-center px-1.5 py-0.5 rounded border disabled:opacity-30 disabled:cursor-not-allowed"
+            style={{
+              background: 'rgba(255,255,255,0.04)',
+              borderColor: 'rgba(255,255,255,0.08)',
+              color: 'rgba(255,255,255,0.55)',
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+              <polyline points="17 21 17 13 7 13 7 21" />
+              <polyline points="7 3 7 8 15 8" />
             </svg>
           </button>
           {/* Pop-out toggle — switches between docked (default, auto-
