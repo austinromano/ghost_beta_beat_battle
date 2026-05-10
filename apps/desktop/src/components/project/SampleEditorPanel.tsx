@@ -5,6 +5,12 @@ import Waveform from '../tracks/Waveform';
 import { samplePreview } from '../../lib/samplePreview';
 import EffectChainEditor from './EffectChainEditor';
 import { DRUM_RACK_FX_KEY, MASTER_FX_KEY, laneKeyOf, useEffectsStore } from '../../stores/effectsStore';
+import { useMidiTrack } from '../../stores/midiTrackStore';
+import { audioBufferCache, getAudioData } from '../../lib/audio';
+import { api } from '../../lib/api';
+import { getCtx } from '../../stores/audio/graph';
+import { INSTRUMENT_DRAG_MIME } from '../instruments/InstrumentsSection';
+import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
 
 // Bottom sample editor / clip inspector. Mounts at the bottom of the
 // arrangement view; shows when exactly one clip is selected. Big waveform,
@@ -291,17 +297,147 @@ function DrumRackFxView() {
 // project id, so the chain stored under that id is what midiFxBus
 // routes notes through. The label uses the track's display name so
 // the user can tell at a glance which MIDI track they're editing
-// when there are several.
+// when there are several. The Sampler device sits ABOVE the effect
+// chain — Ableton-style: instrument first, FX inserts after.
 function MidiTrackFxView({ trackName, laneKey }: { trackName: string; laneKey: string }) {
   return (
     <div className="shrink-0 mt-2">
       <div className="px-3 py-1 text-[10.5px] font-bold tracking-[0.15em] uppercase text-purple-300/80">
         {trackName} FX
       </div>
+      <SamplerDeviceRow trackId={laneKey} />
       <EffectChainEditor
         laneKey={laneKey}
         emptyMessage="Drag EQ, Comp, or Reverb from the sidebar to add effects to this MIDI track."
       />
+    </div>
+  );
+}
+
+// Sampler device chip rendered as the first device in a MIDI track's
+// chain. Shows the instrument's loaded sample name (or an empty drop
+// hint), opens the floating Sampler editor on click, and accepts:
+//   - INSTRUMENT_DRAG_MIME (sampler tile from the sidebar) → seeds an
+//     empty instrument record + pops the sampler
+//   - OS file / sample-library / project-file drops → loads the
+//     sample into the instrument directly
+// Same drop logic as the lane header so the user can drop in either
+// place; this one just lives inside the FX panel where the chain is.
+function SamplerDeviceRow({ trackId }: { trackId: string }) {
+  const projectId = useProjectStore((s) => s.currentProject?.id);
+  const instrument = useMidiTrack((s) => s.instruments[trackId]);
+  const ensureInstrument = useMidiTrack((s) => s.ensureInstrument);
+  const setInstrument = useMidiTrack((s) => s.setInstrument);
+  const openSampler = useMidiTrack((s) => s.openSampler);
+  const [dragOver, setDragOver] = useState(false);
+
+  const acceptDrag = (dt: DataTransfer) => (
+    !!dt.files?.length
+    || dt.types.includes(SAMPLE_LIBRARY_DRAG_MIME)
+    || dt.types.includes('application/x-ghost-projectfile')
+    || dt.types.includes(INSTRUMENT_DRAG_MIME)
+  );
+  const onDragOver = (e: React.DragEvent) => {
+    if (!acceptDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!dragOver) setDragOver(true);
+  };
+  const onDragLeave = () => setDragOver(false);
+  const onDrop = async (e: React.DragEvent) => {
+    if (!acceptDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    if (!projectId) return;
+
+    const instRaw = e.dataTransfer.getData(INSTRUMENT_DRAG_MIME);
+    if (instRaw) {
+      try {
+        const payload = JSON.parse(instRaw) as { kind: string };
+        if (payload?.kind === 'sampler') {
+          ensureInstrument(trackId);
+          openSampler(trackId);
+          return;
+        }
+      } catch { /* malformed — fall through */ }
+    }
+    const file = e.dataTransfer.files?.[0];
+    if (file && /audio|wav|mp3|flac|aiff|ogg|m4a|aac/i.test(file.type + file.name)) {
+      try {
+        const arr = await file.arrayBuffer();
+        const buffer = await getCtx().decodeAudioData(arr.slice(0));
+        const name = file.name.replace(/\.[^.]+$/, '');
+        const { fileId } = await api.uploadFile(projectId, file);
+        ensureInstrument(trackId);
+        setInstrument(trackId, name, buffer, fileId);
+      } catch { /* user can retry */ }
+      return;
+    }
+    const libRaw = e.dataTransfer.getData(SAMPLE_LIBRARY_DRAG_MIME);
+    if (libRaw) {
+      try {
+        const lib = JSON.parse(libRaw) as { id: string; name: string };
+        const arr = await api.downloadSampleLibraryAudio(lib.id);
+        const buffer = await getCtx().decodeAudioData(arr.slice(0));
+        const name = lib.name.replace(/\.[^.]+$/, '');
+        const ext = lib.name.match(/\.[a-z0-9]+$/i)?.[0] || '.wav';
+        const fileName = lib.name.endsWith(ext) ? lib.name : `${name}${ext}`;
+        const fakeFile = new File([arr], fileName, { type: 'audio/wav' });
+        const { fileId } = await api.uploadFile(projectId, fakeFile);
+        ensureInstrument(trackId);
+        setInstrument(trackId, name, buffer, fileId);
+      } catch { /* user can retry */ }
+      return;
+    }
+    const projRaw = e.dataTransfer.getData('application/x-ghost-projectfile');
+    if (projRaw) {
+      try {
+        const meta = JSON.parse(projRaw) as { id: string; name: string };
+        const cached = audioBufferCache.get(meta.id);
+        const buffer = cached ?? (await getAudioData(projectId, meta.id)).buffer;
+        ensureInstrument(trackId);
+        setInstrument(trackId, meta.name.replace(/\.[^.]+$/, ''), buffer, meta.id);
+      } catch { /* ignore */ }
+    }
+  };
+
+  const hasSample = !!(instrument?.fileId || instrument?.buffer);
+  const sampleName = instrument?.name || 'Empty';
+
+  return (
+    <div
+      onDragOver={onDragOver}
+      onDragEnter={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      onClick={() => { ensureInstrument(trackId); openSampler(trackId); }}
+      className="mx-3 mb-2 rounded-md cursor-pointer transition-colors flex items-center gap-2 px-3 py-2"
+      style={{
+        background: dragOver ? 'rgba(168,85,247,0.18)' : 'rgba(124,58,237,0.10)',
+        border: dragOver ? '1px dashed rgba(168,85,247,0.7)' : '1px solid rgba(255,255,255,0.06)',
+        minHeight: 38,
+      }}
+      title={hasSample
+        ? `Sampler · ${sampleName} — click to edit, drop a new sample to replace`
+        : 'Drag a Sampler from the Instruments sidebar, or drop a sample directly'}
+    >
+      <div
+        className="shrink-0 w-7 h-7 rounded flex items-center justify-center"
+        style={{ background: 'rgba(168,85,247,0.25)', border: '1px solid rgba(168,85,247,0.4)' }}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 12c1-3 2-3 3 0s2 3 3 0 2-3 3 0 2 3 3 0 2-3 3 0 2 3 3 0" />
+        </svg>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[11px] font-bold tracking-wide uppercase text-purple-300/90">Sampler</div>
+        <div className="text-[11.5px] text-white/80 truncate">
+          {hasSample ? sampleName : 'Drag a Sampler or sample here'}
+        </div>
+      </div>
+      <span className="text-[9.5px] font-mono text-white/40 uppercase tracking-wider">Instrument</span>
     </div>
   );
 }
