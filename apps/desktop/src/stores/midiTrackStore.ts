@@ -527,6 +527,11 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
   createClipAt: (trackId, startSec, lengthSec) => {
     get().captureUndoSnapshot('Add MIDI clip');
     const id = crypto.randomUUID();
+    // Don't auto-create an instrument — Sampler is now opt-in. The
+    // user explicitly adds it by dragging the Sampler tile (or a
+    // sample) onto the FX chain or lane header. The piano roll
+    // tolerates a missing instrument with `?.` lookups, and the
+    // scheduler skips clips whose track has no buffer to play.
     set((s) => ({
       clips: [...s.clips, {
         id,
@@ -536,11 +541,6 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
         notes: [],
       }],
       selectedClipId: id,
-      // Make sure the track has an instrument entry so the piano roll
-      // has something to read for baseNote / volume even on first paint.
-      instruments: s.instruments[trackId]
-        ? s.instruments
-        : { ...s.instruments, [trackId]: makeInstrument() },
     }));
     return id;
   },

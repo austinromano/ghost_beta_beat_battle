@@ -400,12 +400,10 @@ export function ArrangementScrollView({ children, showAll }: { children: React.R
     if (!projectId) return;
     const name = type === 'midi' ? 'MIDI' : 'Audio';
     try {
-      const result: any = await api.addTrack(projectId, { name, type: type as any } as any);
-      // MIDI tracks need an instrument record so the lane can render
-      // and accept a sample drop on first click. Audio tracks don't.
-      if (type === 'midi' && result?.id) {
-        useMidiTrack.getState().ensureInstrument(result.id);
-      }
+      await api.addTrack(projectId, { name, type: type as any } as any);
+      // MIDI tracks no longer get an auto-created instrument — the
+      // Sampler is opt-in via drag-drop on the lane header or the
+      // track's FX chain.
       window.dispatchEvent(new CustomEvent('ghost-refresh-project'));
     } catch { /* server error — user can retry */ }
   };

@@ -7,6 +7,11 @@ import EffectChainEditor from './EffectChainEditor';
 import { DRUM_RACK_FX_KEY, MASTER_FX_KEY, laneKeyOf, useEffectsStore } from '../../stores/effectsStore';
 import { useMidiTrack } from '../../stores/midiTrackStore';
 import { EmbeddedSampler } from '../instruments/Sampler';
+import { audioBufferCache, getAudioData } from '../../lib/audio';
+import { api } from '../../lib/api';
+import { getCtx } from '../../stores/audio/graph';
+import { INSTRUMENT_DRAG_MIME } from '../instruments/InstrumentsSection';
+import { SAMPLE_LIBRARY_DRAG_MIME } from '../layout/SampleLibrarySection';
 
 // Bottom sample editor / clip inspector. Mounts at the bottom of the
 // arrangement view; shows when exactly one clip is selected. Big waveform,
@@ -296,15 +301,105 @@ function DrumRackFxView() {
 // when there are several. The Sampler device sits ABOVE the effect
 // chain — Ableton-style: instrument first, FX inserts after.
 function MidiTrackFxView({ trackName, laneKey }: { trackName: string; laneKey: string }) {
+  const projectId = useProjectStore((s) => s.currentProject?.id);
+  // The Sampler is opt-in per track. Only render its chain card when
+  // the user has explicitly added one — i.e. an instrument record
+  // exists for this track. Each track is keyed by its own id, so two
+  // tracks never share Sampler state.
+  const hasInstrument = useMidiTrack((s) => !!s.instruments[laneKey]);
+  const ensureInstrument = useMidiTrack((s) => s.ensureInstrument);
+  const setInstrument = useMidiTrack((s) => s.setInstrument);
+  const setSamplerRange = useMidiTrack((s) => s.setSamplerRange);
+  const openSampler = useMidiTrack((s) => s.openSampler);
+
+  // Catch Sampler-tile / sample drops anywhere in the FX panel area.
+  // Effect drops bubble through to EffectChainEditor's own handler
+  // because we only preventDefault for non-effect MIME types.
+  const acceptInstrumentOrSample = (dt: DataTransfer) => (
+    !!dt.files?.length
+    || dt.types.includes(SAMPLE_LIBRARY_DRAG_MIME)
+    || dt.types.includes('application/x-ghost-projectfile')
+    || dt.types.includes(INSTRUMENT_DRAG_MIME)
+  );
+  const onPanelDragOver = (e: React.DragEvent) => {
+    if (!acceptInstrumentOrSample(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const onPanelDrop = async (e: React.DragEvent) => {
+    if (!acceptInstrumentOrSample(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!projectId) return;
+    const instRaw = e.dataTransfer.getData(INSTRUMENT_DRAG_MIME);
+    if (instRaw) {
+      try {
+        const payload = JSON.parse(instRaw) as { kind: string };
+        if (payload?.kind === 'sampler') {
+          ensureInstrument(laneKey);
+          openSampler(laneKey);
+          return;
+        }
+      } catch { /* malformed — fall through */ }
+    }
+    const file = e.dataTransfer.files?.[0];
+    if (file && /audio|wav|mp3|flac|aiff|ogg|m4a|aac/i.test(file.type + file.name)) {
+      try {
+        const arr = await file.arrayBuffer();
+        const buffer = await getCtx().decodeAudioData(arr.slice(0));
+        const name = file.name.replace(/\.[^.]+$/, '');
+        const { fileId } = await api.uploadFile(projectId, file);
+        ensureInstrument(laneKey);
+        setInstrument(laneKey, name, buffer, fileId);
+        setSamplerRange(laneKey, 0, 1);
+      } catch { /* user can retry */ }
+      return;
+    }
+    const libRaw = e.dataTransfer.getData(SAMPLE_LIBRARY_DRAG_MIME);
+    if (libRaw) {
+      try {
+        const lib = JSON.parse(libRaw) as { id: string; name: string };
+        const arr = await api.downloadSampleLibraryAudio(lib.id);
+        const buffer = await getCtx().decodeAudioData(arr.slice(0));
+        const name = lib.name.replace(/\.[^.]+$/, '');
+        const ext = lib.name.match(/\.[a-z0-9]+$/i)?.[0] || '.wav';
+        const fileName = lib.name.endsWith(ext) ? lib.name : `${name}${ext}`;
+        const fakeFile = new File([arr], fileName, { type: 'audio/wav' });
+        const { fileId } = await api.uploadFile(projectId, fakeFile);
+        ensureInstrument(laneKey);
+        setInstrument(laneKey, name, buffer, fileId);
+        setSamplerRange(laneKey, 0, 1);
+      } catch { /* user can retry */ }
+      return;
+    }
+    const projRaw = e.dataTransfer.getData('application/x-ghost-projectfile');
+    if (projRaw) {
+      try {
+        const meta = JSON.parse(projRaw) as { id: string; name: string };
+        const cached = audioBufferCache.get(meta.id);
+        const buffer = cached ?? (await getAudioData(projectId, meta.id)).buffer;
+        ensureInstrument(laneKey);
+        setInstrument(laneKey, meta.name.replace(/\.[^.]+$/, ''), buffer, meta.id);
+      } catch { /* ignore */ }
+    }
+  };
+
   return (
-    <div className="shrink-0 mt-2">
+    <div
+      className="shrink-0 mt-2"
+      onDragOver={onPanelDragOver}
+      onDragEnter={onPanelDragOver}
+      onDrop={onPanelDrop}
+    >
       <div className="px-3 py-1 text-[10.5px] font-bold tracking-[0.15em] uppercase text-purple-300/80">
         {trackName} FX
       </div>
       <EffectChainEditor
         laneKey={laneKey}
-        emptyMessage="Drag EQ, Comp, or Reverb from the sidebar to add effects to this MIDI track."
-        leading={<SamplerChainCard trackId={laneKey} />}
+        emptyMessage={hasInstrument
+          ? 'Drag EQ, Comp, or Reverb from the sidebar to add effects to this MIDI track.'
+          : 'Drag a Sampler from the Instruments sidebar — or drop a sample, EQ, Comp, or Reverb here.'}
+        leading={hasInstrument ? <SamplerChainCard trackId={laneKey} /> : undefined}
       />
     </div>
   );

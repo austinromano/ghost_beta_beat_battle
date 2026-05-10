@@ -94,12 +94,13 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
   };
 
   // Click empty lane → make a new clip there, 4 bars long by default.
+  // No auto-ensureInstrument — Sampler is opt-in. The clip exists in
+  // the store regardless; the user adds a Sampler when they want.
   const handleLaneMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest('[data-midi-clip]')) return;
     const t = Math.max(0, snapTime(xToTime(e.clientX)));
     const lengthSec = 4 * barSec;
-    ensureInstrument(trackId);
     const id = createClipAt(trackId, t, lengthSec);
     selectClip(id);
     setOpen(true);

@@ -74,7 +74,6 @@ export function PianoRollOpenButton() {
  */
 export function AddMidiTrackButton({ projectId }: { projectId: string }) {
   const open = useMidiTrack((s) => s.open);
-  const ensureInstrument = useMidiTrack((s) => s.ensureInstrument);
   // We hide the button while the panel is open — the panel covers
   // most of the bottom-right area anyway, and adding new tracks
   // mid-edit would require closing the piano roll first to see them.
@@ -83,11 +82,10 @@ export function AddMidiTrackButton({ projectId }: { projectId: string }) {
   const onClick = async () => {
     if (!projectId) return;
     try {
-      const result: any = await api.addTrack(projectId, { name: 'MIDI', type: 'midi' as any } as any);
-      // Pre-create the instrument record so the lane can immediately
-      // accept a sample drop without an extra ensureInstrument round
-      // trip. The MIDI store is keyed by the project track id.
-      if (result?.id) ensureInstrument(result.id);
+      await api.addTrack(projectId, { name: 'MIDI', type: 'midi' as any } as any);
+      // Sampler is opt-in: the user adds it later via drag-drop on
+      // the lane header or the FX chain. Each track's instrument is
+      // keyed by its own track id, so per-track state stays isolated.
       window.dispatchEvent(new CustomEvent('ghost-refresh-project'));
     } catch { /* server error — user can retry */ }
   };
