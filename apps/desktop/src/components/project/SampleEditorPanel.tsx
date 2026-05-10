@@ -412,6 +412,7 @@ function MidiTrackFxView({ trackName, laneKey }: { trackName: string; laneKey: s
 // drops are handled by the embedded Sampler itself.
 function SamplerChainCard({ trackId }: { trackId: string }) {
   const projectId = useProjectStore((s) => s.currentProject?.id);
+  const removeInstrument = useMidiTrack((s) => s.removeInstrument);
   if (!projectId) return null;
   return (
     <div
@@ -428,7 +429,8 @@ function SamplerChainCard({ trackId }: { trackId: string }) {
       }}
     >
       {/* Header strip — labels the device. The body below is the
-          actual Sampler UI; controls work inline. */}
+          actual Sampler UI; controls work inline. ✕ removes the
+          Sampler from this track (undoable via the toolbar). */}
       <div
         className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5"
         style={{ background: 'rgba(168,85,247,0.25)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
@@ -437,7 +439,14 @@ function SamplerChainCard({ trackId }: { trackId: string }) {
           <path d="M3 12c1-3 2-3 3 0s2 3 3 0 2-3 3 0 2 3 3 0 2-3 3 0 2 3 3 0" />
         </svg>
         <span className="text-[10.5px] font-bold tracking-[0.12em] uppercase text-white">Sampler</span>
-        <span className="ml-auto text-[8.5px] font-mono text-white/40 uppercase tracking-wider">Inst</span>
+        <span className="ml-2 text-[8.5px] font-mono text-white/40 uppercase tracking-wider">Inst</span>
+        <button
+          onClick={(e) => { e.stopPropagation(); removeInstrument(trackId); }}
+          className="ml-auto w-4 h-4 flex items-center justify-center rounded text-white/55 hover:text-white hover:bg-white/[0.12] transition-colors text-[12px] leading-none"
+          title="Remove Sampler from this track"
+        >
+          ×
+        </button>
       </div>
       {/* Body — actual Sampler UI inline. EmbeddedSampler hides its
           own preview keyboard since the chain row is for editing the

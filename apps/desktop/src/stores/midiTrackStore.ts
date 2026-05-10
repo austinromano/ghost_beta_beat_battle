@@ -103,6 +103,7 @@ interface MidiTrackState {
   // Instrument config
   ensureInstrument: (trackId: string) => void;
   setInstrument: (trackId: string, name: string, buffer: AudioBuffer, fileId?: string | null) => void;
+  removeInstrument: (trackId: string) => void;
   setBaseNote: (trackId: string, pitch: number) => void;
   setInstrumentVolume: (trackId: string, v: number) => void;
   toggleInstrumentMuted: (trackId: string) => void;
@@ -458,6 +459,22 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
       },
     };
   }),
+
+  removeInstrument: (trackId) => {
+    if (!useMidiTrack.getState().instruments[trackId]) return;
+    // Snapshot first so undo can put the Sampler back exactly as it
+    // was — sample, base note, ADSR, the lot.
+    get().captureUndoSnapshot('Remove Sampler');
+    // Close the floating Sampler editor if it was viewing this track,
+    // otherwise it would hang on a now-missing instrument record.
+    if (useMidiTrack.getState().samplerOpenTrackId === trackId) {
+      set({ samplerOpenTrackId: null });
+    }
+    set((s) => {
+      const { [trackId]: _gone, ...rest } = s.instruments;
+      return { instruments: rest };
+    });
+  },
 
   setBaseNote: (trackId, pitch) => set((s) => {
     const prev = s.instruments[trackId];
