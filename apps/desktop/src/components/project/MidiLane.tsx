@@ -48,6 +48,7 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
   const moveClip = useMidiTrack((s) => s.moveClip);
   const resizeClip = useMidiTrack((s) => s.resizeClip);
   const deleteClip = useMidiTrack((s) => s.deleteClip);
+  const duplicateClip = useMidiTrack((s) => s.duplicateClip);
   const selectClip = useMidiTrack((s) => s.selectClip);
   const openSampler = useMidiTrack((s) => s.openSampler);
   const setSelectedBusId = useAudioStore((s) => s.setSelectedBusId);
@@ -456,6 +457,7 @@ export default function MidiLane({ laneKey, track, laneHeight, projectId }: Prop
             onMove={(newStart) => moveClip(clip.id, Math.max(0, snapTime(newStart)))}
             onResize={(newLen) => resizeClip(clip.id, Math.max(barSec, snapTime(newLen)))}
             onDelete={() => deleteClip(clip.id)}
+            onDuplicate={() => duplicateClip(clip.id, clip.startSec + clip.lengthSec)}
             xToTime={xToTime}
           />
         ))}

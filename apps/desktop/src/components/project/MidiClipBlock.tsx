@@ -1,4 +1,4 @@
-import { memo, useRef } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { MidiClip } from '../../stores/midiTrackStore';
 
 // One MIDI clip block on a MIDI lane in the arrangement.
@@ -12,7 +12,8 @@ import type { MidiClip } from '../../stores/midiTrackStore';
 //   - Click body → onSelect (parent opens piano roll for this clip)
 //   - Drag body → onMove (snapped to bar by parent)
 //   - Drag right edge → onResize (length, snapped to bar by parent)
-//   - Right-click → onDelete (no confirmation)
+//   - Right-click → context menu (Duplicate). Delete is keyboard-only
+//     to prevent accidental destructive right-clicks.
 //   - dragstart on body → emits 'application/x-ghost-midi-clip' MIME so
 //     the user can drag the clip to a different MIDI lane (FL-style).
 
@@ -27,6 +28,7 @@ interface Props {
   onMove: (newStartSec: number) => void;
   onResize: (newLengthSec: number) => void;
   onDelete: () => void;
+  onDuplicate: () => void;
   // Convert a clientX (page coords) → project-time on this lane. The
   // parent owns the lane geometry so this gets passed in.
   xToTime: (clientX: number) => number;
@@ -35,9 +37,26 @@ interface Props {
 const PREVIEW_LOW_PITCH = 36;   // C2
 const PREVIEW_HIGH_PITCH = 96;  // C7
 
-function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSelect, onMove, onResize, onDelete, xToTime }: Props) {
+function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSelect, onMove, onResize, onDelete, onDuplicate, xToTime }: Props) {
+  void onDelete; // Delete now lives on the keyboard (Delete / Backspace)
   const leftPct = (clip.startSec / arrangementDur) * 100;
   const widthPct = (clip.lengthSec / arrangementDur) * 100;
+
+  // Right-click context menu. Anchored in screen coords; window-level
+  // mousedown / Escape dismiss it. Right-click no longer deletes
+  // outright — that was too easy to trigger by accident.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
 
   // Drag state lives in refs so re-renders during drag don't reset it.
   // Pattern matches the drum clip block — onMouseDown attaches window
@@ -47,12 +66,9 @@ function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSele
   });
 
   const onBodyDown = (e: React.MouseEvent) => {
-    if (e.button === 2) {
-      e.preventDefault();
-      e.stopPropagation();
-      onDelete();
-      return;
-    }
+    // Right-click is handled by onContextMenu below. Bail here so the
+    // pointer-down doesn't kick off a move-drag from the right button.
+    if (e.button === 2) return;
     if (e.button !== 0) return;
     e.stopPropagation();
     onSelect();
@@ -138,7 +154,14 @@ function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSele
       draggable
       onDragStart={onDragStart}
       onMouseDown={onBodyDown}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Select the clip first so the user sees what the menu is
+        // operating on, then open the menu at the click point.
+        onSelect();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
       className="absolute top-0 cursor-grab active:cursor-grabbing rounded-md overflow-hidden"
       style={{
         left: `${leftPct}%`,
@@ -150,7 +173,7 @@ function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSele
         border: selected ? '1px solid rgba(255,255,255,0.85)' : '1px solid rgba(255,255,255,0.18)',
         boxShadow: selected ? '0 0 8px rgba(168,85,247,0.45)' : 'none',
       }}
-      title="Click to edit · drag to move · right-click to delete"
+      title="Click to edit · drag to move · right-click for options · Delete key to remove"
     >
       {/* Top label strip — clip name placeholder for now. Future: clip
           name editable via double-click. */}
@@ -198,6 +221,28 @@ function MidiClipBlockInner({ clip, arrangementDur, selected, laneHeight, onSele
         style={{ width: 6, background: 'rgba(255,255,255,0.04)' }}
         title="Drag to resize"
       />
+      {menu && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="fixed z-[60] min-w-[160px] rounded-md py-1 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur-md"
+          style={{
+            left: menu.x, top: menu.y,
+            background: 'rgba(20, 12, 30, 0.96)',
+            border: '1px solid rgba(255,255,255,0.08)',
+          }}
+        >
+          <button
+            onClick={() => { setMenu(null); onDuplicate(); }}
+            className="w-full px-3 py-1.5 text-[13px] text-left text-white/80 hover:bg-white/[0.06] hover:text-white transition-colors flex items-center gap-2"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+            Duplicate
+          </button>
+        </div>
+      )}
     </div>
   );
 }

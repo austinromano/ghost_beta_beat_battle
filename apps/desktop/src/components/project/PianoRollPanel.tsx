@@ -196,6 +196,13 @@ export default function PianoRollPanel({ projectId }: Props) {
   }, [isPlaying, projectId, startScheduler, stopScheduler]);
 
   const setLoopRegion = useAudioStore((s) => s.setLoopRegion);
+  const deleteClip = useMidiTrack((s) => s.deleteClip);
+
+  // Clip-level Delete / Backspace — fires when the user has selected a
+  // MIDI clip in the lane but the piano-roll panel itself isn't the
+  // focused surface. The piano-roll's note-level Delete handler runs
+  // only when focused, so the two listeners don't fight: focus-in →
+  // delete notes, focus-out → delete the whole clip.
 
   // --- On open, fall back to the first existing clip --------------
   // Real MIDI tracks live in the project's track table now, and clips
@@ -299,6 +306,31 @@ export default function PianoRollPanel({ projectId }: Props) {
   // the arrangement above ends up wiping piano-roll notes too. Default
   // to false so the panel doesn't grab focus the moment it opens.
   const [focused, setFocused] = useState(false);
+
+  // Clip-level Delete / Backspace — fires when the user has selected a
+  // MIDI clip in the lane but the piano-roll panel itself isn't the
+  // focused surface. The piano-roll's note-level Delete handler runs
+  // only when focused, so the two listeners don't fight: focus-in →
+  // delete notes, focus-out → delete the whole clip.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      // Bail when the panel owns the keyboard — its own handler
+      // covers Delete for note selections inside the grid.
+      if (open && focused) return;
+      const id = useMidiTrack.getState().selectedClipId;
+      if (!id) return;
+      const clip = useMidiTrack.getState().clips.find((c) => c.id === id);
+      if (!clip) return;
+      e.preventDefault();
+      deleteClip(id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, focused, deleteClip]);
+
   const dragRef = useRef<DragState>({ kind: 'idle' });
   const panelRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
