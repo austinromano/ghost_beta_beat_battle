@@ -645,6 +645,27 @@ export default function PianoRollPanel({ projectId }: Props) {
         return;
       }
 
+      // Nudge in time — Left/Right by one snap step, Shift+Left/Right
+      // by a full bar. Step size honors the snap-div picker so the
+      // keyboard nudge lands on the same grid the mouse paint snaps
+      // to. Falls back to a 16th when snap is Off.
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (selectedIds.size === 0) return;
+        e.preventDefault();
+        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        const stepSec = snapDiv > 0 ? barSec / snapDiv : barSec / 16;
+        const deltaSec = (e.shiftKey ? barSec : stepSec) * dir;
+        // Walk each selected note and rewrite its startSec. moveNote
+        // clamps to >= 0 so leftward nudges past bar 0 are no-ops on
+        // already-flush notes instead of pulling them negative.
+        for (const id of selectedIds) {
+          const n = selectedClip.notes.find((nn) => nn.id === id);
+          if (!n) continue;
+          moveNote(selectedClip.id, id, n.startSec + deltaSec, n.pitch);
+        }
+        return;
+      }
+
       // Select all — useful as a shortcut to grab every note in the
       // clip without having to marquee-drag the whole grid.
       if (mod && (e.key === 'a' || e.key === 'A')) {
@@ -742,7 +763,7 @@ export default function PianoRollPanel({ projectId }: Props) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, focused, selectedClip, selectedIds, deleteNotes, addNote, transposeNotes, snap, barSec, audition, instrument]);
+  }, [open, focused, selectedClip, selectedIds, deleteNotes, addNote, transposeNotes, moveNote, snap, snapDiv, barSec, audition, instrument]);
 
   // --- Sample drop on the track header -----------------------------
   const onHeaderDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
