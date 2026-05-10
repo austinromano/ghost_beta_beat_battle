@@ -101,6 +101,24 @@ export default function TransportBar({ tracks, projectId, projectTempo, onTempoC
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Ctrl+D — duplicate the whole arrangement, FL Studio style. Every
+  // audio + MIDI + drum clip gets a copy shifted by the current
+  // content length, so the duplicate sits flush right after the
+  // original block. Bails on input/textarea targets the same way
+  // Ctrl+Z does, and skips when there's no content to copy.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key !== 'd' && e.key !== 'D') return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+      if (projectId) duplicateArrangement(projectId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [projectId]);
+
   useEffect(() => {
     if (!tracks || !projectId) return;
     // Track which fileIds we've already kicked a fetch for so we don't
@@ -686,6 +704,16 @@ export default function TransportBar({ tracks, projectId, projectTempo, onTempoC
             }} className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${(canRedo || canRedoMidi) ? 'text-white/60 hover:text-white' : 'text-white/15 cursor-not-allowed'}`} title="Redo (Ctrl+Shift+Z)">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" /></svg>
             </button>
+            <button
+              onClick={() => { if (projectId) duplicateArrangement(projectId); }}
+              className="w-6 h-6 flex items-center justify-center rounded text-white/60 hover:text-white transition-colors"
+              title="Duplicate arrangement (Ctrl+D) — copies every clip flush after the last one"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            </button>
             <span className="text-[9px] font-mono text-white/60 ml-1">{formatTime(currentTime)}</span>
           </div>
 
@@ -728,4 +756,94 @@ export default function TransportBar({ tracks, projectId, projectTempo, onTempoC
       </FrequencyBar>
     </div>
   );
+}
+
+// FL-style duplicate-all. Computes the rightmost end across every
+// clip type (audio / MIDI / drum), then drops a copy of each one
+// shifted by that span so the duplicate sits flush right after the
+// original block. Audio clips spawn new project-track rows on the
+// server (sharing fileId) and pre-stash their startOffset via
+// pendingTrackOffsets so the new row lands at the right position
+// once the project refreshes. MIDI + drum clips clone client-side
+// via direct setState writes; each store captures a single undo
+// snapshot before the mutation so Ctrl+Z reverses the whole batch.
+async function duplicateArrangement(projectId: string) {
+  const audioState = useAudioStore.getState();
+  const midiState = useMidiTrack.getState();
+  const drumState = useDrumRack.getState();
+  const projectTracks = useProjectStore.getState().currentProject?.tracks || [];
+
+  // 1. Find the furthest end across all content.
+  let maxEnd = 0;
+  audioState.loadedTracks.forEach((t) => {
+    const dur = t.buffer?.duration ?? 0;
+    const end = t.startOffset + dur;
+    if (end > maxEnd) maxEnd = end;
+  });
+  for (const c of midiState.clips) {
+    const end = c.startSec + c.lengthSec;
+    if (end > maxEnd) maxEnd = end;
+  }
+  for (const c of drumState.clips) {
+    const end = c.startSec + c.lengthSec;
+    if (end > maxEnd) maxEnd = end;
+  }
+  if (maxEnd <= 0) return;
+
+  // 2. Clone MIDI clips in one setState — single undo snapshot for
+  // the whole batch.
+  if (midiState.clips.length > 0) {
+    midiState.captureUndoSnapshot('Duplicate arrangement');
+    useMidiTrack.setState((s) => ({
+      clips: [
+        ...s.clips,
+        ...s.clips.map((c) => ({
+          ...c,
+          id: crypto.randomUUID(),
+          startSec: c.startSec + maxEnd,
+          notes: c.notes.map((n) => ({ ...n, id: crypto.randomUUID() })),
+        })),
+      ],
+    }));
+  }
+
+  // 3. Clone drum clips.
+  if (drumState.clips.length > 0) {
+    useDrumRack.setState((s) => ({
+      clips: [
+        ...s.clips,
+        ...s.clips.map((c) => ({
+          ...c,
+          id: crypto.randomUUID(),
+          startSec: c.startSec + maxEnd,
+        })),
+      ],
+    }));
+  }
+
+  // 4. Clone audio clips — server side. Iterate the project's track
+  // rows (the canonical audio clip list) and spawn a new row per
+  // audio track with the same fileId at startOffset + maxEnd. The
+  // project refresh below picks the new rows up and audioStore
+  // honors the pendingTrackOffsets on first load.
+  for (const track of projectTracks) {
+    if (!track || (track.type !== 'audio' && track.type !== 'loop')) continue;
+    if (!track.fileId) continue;
+    try {
+      const loaded = audioState.loadedTracks.get(track.id);
+      const baseOffset = loaded?.startOffset ?? 0;
+      const result: any = await api.addTrack(projectId, {
+        name: track.name,
+        type: track.type as any,
+        fileId: track.fileId,
+        fileName: track.fileName,
+        bpm: track.bpm,
+        key: track.key,
+      } as any);
+      if (result?.id) {
+        pendingTrackOffsets.set(result.id, baseOffset + maxEnd);
+      }
+    } catch { /* server error — skip this track and continue with others */ }
+  }
+  window.dispatchEvent(new CustomEvent('ghost-refresh-project'));
 }
