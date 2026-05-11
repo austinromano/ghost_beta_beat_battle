@@ -33,10 +33,10 @@ import { getLaneReverbAnalyser } from '../../stores/audio/trackReverb';
 
 const ACCENT = '#a855f7';
 // Sized to match ChannelEqPanel + CompressorPanel + SamplerChainCard
-// so all four cards align in the chain rail. Width tuned so the
-// iso-stack visualization reads with the same room-y proportion as
-// the reference image.
-const PANEL_W = 500;
+// so every card aligns in the chain rail. Width is a bit generous so
+// the iso-stack visualization centerpiece breathes and the side knob
+// stack doesn't crowd against it.
+const PANEL_W = 540;
 const PANEL_H = 296;
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -179,7 +179,7 @@ export default function ReverbPanel({
           pre-delay knob. */}
       <div className="flex" style={{ height: PANEL_H - 36 }}>
         <div className="flex flex-col flex-1 min-w-0">
-          <div className="flex px-1 pt-2 pb-1" style={{ height: 130 }}>
+          <div className="flex px-2 pt-2 pb-1" style={{ height: 150 }}>
             <ParticleRoom
               size={size} decay={decay} mix={mix}
               time={time} damping={damping} width={width}
@@ -187,7 +187,7 @@ export default function ReverbPanel({
             />
           </div>
           <div
-            className="flex items-center px-6 pt-1 pb-2 border-t"
+            className="flex items-center px-6 pt-2 pb-3 border-t"
             style={{ borderColor: 'rgba(255,255,255,0.05)', flex: 1 }}
           >
             <div className="flex-1 flex justify-center min-w-0">
@@ -220,8 +220,8 @@ export default function ReverbPanel({
           </div>
         </div>
         <div
-          className="flex flex-col items-center justify-center gap-3 shrink-0 px-2 py-2 border-l"
-          style={{ width: 70, borderColor: 'rgba(255,255,255,0.05)' }}
+          className="flex flex-col items-center justify-center gap-4 shrink-0 px-3 py-2 border-l"
+          style={{ width: 86, borderColor: 'rgba(255,255,255,0.05)' }}
         >
           <Knob
             compact
@@ -610,8 +610,12 @@ function Knob({ label, valueLabel, value, min, max, onChange, large = false, com
   compact?: boolean;
 }) {
   const dragStartRef = useRef<{ y: number; v: number } | null>(null);
-  const SIZE = large ? 56 : compact ? 36 : 44;
-  const RADIUS = large ? 24 : compact ? 14 : 19;
+  // Bumped compact size up from 36/14 → 50/22 so the knobs read at
+  // a glance instead of looking like punctuation. Large + default
+  // unchanged so the existing big-knob use cases keep their
+  // proportions; only the chain-rail knobs swap to the new size.
+  const SIZE = large ? 56 : compact ? 50 : 44;
+  const RADIUS = large ? 24 : compact ? 22 : 19;
 
   const t = clamp((value - min) / (max - min), 0, 1);
   const startAngle = -135;
