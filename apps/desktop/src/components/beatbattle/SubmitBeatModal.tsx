@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useAudioStore } from '../../stores/audioStore';
 import { getCtx, getMaster } from '../../stores/audio/graph';
 import { getSocket } from '../../lib/socket';
-import { setBattleOptOut } from '../../hooks/useBeatBattleOptOut';
 
 // Submit Beat flow for Beat Battle projects. Renders the full
 // arrangement in real time by tapping the master gain node into a
@@ -41,6 +40,10 @@ export default function SubmitBeatModal({ open, battleId, onClose, onSubmitted }
   const [progress, setProgress] = useState(0); // 0..1
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The raw Blob is retained alongside the preview URL so submit
+  // can ship the audio to the server without re-reading the URL.
+  const [renderedBlob, setRenderedBlob] = useState<Blob | null>(null);
+  const renderedDurationRef = useRef<number>(0);
 
   // Plumbing refs cleaned up on close / cancel.
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -101,6 +104,7 @@ export default function SubmitBeatModal({ open, battleId, onClose, onSubmitted }
         try {
           const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
           const url = URL.createObjectURL(blob);
+          setRenderedBlob(blob);
           setBlobUrl(url);
           setPhase('ready');
         } catch (err) {
@@ -114,6 +118,7 @@ export default function SubmitBeatModal({ open, battleId, onClose, onSubmitted }
 
       setPhase('rendering');
       setProgress(0);
+      renderedDurationRef.current = duration;
       seekTo(0);
       recorder.start();
       play();
@@ -151,21 +156,45 @@ export default function SubmitBeatModal({ open, battleId, onClose, onSubmitted }
     onClose();
   }
 
-  function submit() {
+  async function submit() {
     setPhase('submitting');
     try {
       const socket = getSocket();
-      socket?.emit('battle:submit', { battleId });
+      if (!socket) throw new Error('socket unavailable');
+      // Ship audio bytes alongside the flag so the lobby's Voting
+      // Preview can stream this back on demand. socket.io handles
+      // ArrayBuffer transport natively; we just have to read the
+      // blob into one.
+      let audioBuf: ArrayBuffer | undefined;
+      let mime: string | undefined;
+      if (renderedBlob) {
+        try {
+          audioBuf = await renderedBlob.arrayBuffer();
+          mime = renderedBlob.type || 'audio/webm';
+        } catch (err) {
+          if (import.meta.env.DEV) console.warn('[SubmitBeat] arrayBuffer failed, sending metadata only:', err);
+        }
+      }
+      socket.emit('battle:submit', {
+        battleId,
+        audio: audioBuf,
+        mime,
+        durationSec: Math.max(0, renderedDurationRef.current),
+      });
     } catch (err) {
       if (import.meta.env.DEV) console.warn('[SubmitBeat] socket emit failed:', err);
     }
-    // Once submitted the producer should fall back to the lobby
-    // (spectator mode) and watch the remaining timer tick out. The
-    // opt-out flag drops them from the "active producer" set on the
-    // client so they don't get auto-reopened into another project.
-    try { setBattleOptOut(true); } catch { /* noop */ }
+    // Stay a participant — the user wanted to see their own tile
+    // flip to "submitted" in the lobby, not vanish into spectator
+    // mode. The server already flips participant.submitted=true on
+    // receipt, which is what powers the lobby badge + Voting Preview.
+    // We also persist a per-battle "I submitted" flag so the project
+    // chrome (Submit Beat button, countdown) knows to back off.
+    try { localStorage.setItem(`beat-battle-submitted::${battleId}`, '1'); } catch { /* quota */ }
+    try { window.dispatchEvent(new CustomEvent('ghost-battle-submitted-changed')); } catch { /* SSR */ }
     if (blobUrl) URL.revokeObjectURL(blobUrl);
     setBlobUrl(null);
+    setRenderedBlob(null);
     onSubmitted();
   }
 

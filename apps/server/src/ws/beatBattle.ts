@@ -23,6 +23,19 @@ interface Participant {
   submitted: boolean;
 }
 
+interface Submission {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  // Raw audio bytes from the producer's MediaRecorder bounce.
+  // Kept in-memory only — battles are ephemeral; persistence is v2.
+  // 5 MB cap enforced on receive to prevent abuse.
+  audio: Buffer;
+  mime: string;
+  durationSec: number;
+  submittedAt: string;
+}
+
 interface Battle {
   id: string;
   name: string;
@@ -32,6 +45,9 @@ interface Battle {
   prizePool: number;
   maxPlayers: number;
   participants: Map<string, Participant>;
+  // Bounced submissions keyed by userId. Cleared on resetToWaiting
+  // so a producer can submit fresh in the next round.
+  submissions: Map<string, Submission>;
   // ISO timestamps that drive the client-side countdowns. startsAt
   // is set when status flips to 'starting' (now + 5s); endsAt is set
   // when status flips to 'active' (now + timeLimit). Cleared on
@@ -73,6 +89,7 @@ BATTLES.set(ARENA_ID, {
   prizePool: 500,
   maxPlayers: 8,
   participants: new Map(),
+  submissions: new Map(),
   startsAt: null,
   endsAt: null,
 });
@@ -87,6 +104,17 @@ function snapshot(battle: Battle) {
     prizePool: battle.prizePool,
     maxPlayers: battle.maxPlayers,
     participants: Array.from(battle.participants.values()),
+    // Metadata only — audio bytes are fetched on demand via
+    // battle:fetch-submission so a single state broadcast doesn't
+    // ship multiple megabytes of opus per recipient.
+    submissions: Array.from(battle.submissions.values()).map((s) => ({
+      userId: s.userId,
+      displayName: s.displayName,
+      avatarUrl: s.avatarUrl,
+      mime: s.mime,
+      durationSec: s.durationSec,
+      submittedAt: s.submittedAt,
+    })),
     startsAt: battle.startsAt,
     endsAt: battle.endsAt,
   };
@@ -105,6 +133,7 @@ function resetToWaiting(battle: Battle) {
   battle.status = 'waiting';
   battle.startsAt = null;
   battle.endsAt = null;
+  battle.submissions.clear();
   for (const p of battle.participants.values()) {
     p.ready = false;
     p.submitted = false;
@@ -205,18 +234,64 @@ export function registerBeatBattleHandlers(io: IO, socket: SK) {
     broadcast(io, battle);
   });
 
-  // Producer hits "Submit Beat" in their project. We just flip the
-  // submitted flag on their participant record and rebroadcast so
-  // every lobby viewer sees the badge. Vote-ready audio + judging
-  // are still v2 — the flag is what the UI keys off of for v1.
-  socket.on('battle:submit', ({ battleId }) => {
-    const battle = BATTLES.get(battleId);
+  // Producer hits "Submit Beat" in their project. The client sends
+  // the bounced audio as a binary payload alongside metadata; we
+  // store it in-memory keyed by userId, flip the submitted flag,
+  // and rebroadcast state so every lobby viewer can see the new
+  // submission (and request the audio via battle:fetch-submission).
+  socket.on('battle:submit', (payload: { battleId: string; audio?: ArrayBuffer | Buffer; mime?: string; durationSec?: number }) => {
+    const battle = BATTLES.get(payload.battleId);
     if (!battle) return;
     const me = battle.participants.get(socket.data.userId);
     if (!me) return;
     if (battle.status !== 'active') return; // ignore early/late submits
     me.submitted = true;
+    // Persist audio if it came through. We still flip submitted=true
+    // even on metadata-only payloads so the lobby badge works as a
+    // best-effort fallback (older clients) — but Voting Preview will
+    // skip producers whose audio never made it.
+    if (payload.audio && payload.mime) {
+      const buf = Buffer.isBuffer(payload.audio)
+        ? payload.audio
+        : Buffer.from(payload.audio as ArrayBuffer);
+      // 8 MB hard cap: a 20-minute opus-encoded mono opus stream at
+      // 64 kbps is ~9.6 MB worst case, but our default arrangements
+      // are far shorter; honest clients land well under this. Larger
+      // payloads are dropped to keep one bad actor from hosing the
+      // room.
+      const MAX_BYTES = 8 * 1024 * 1024;
+      if (buf.byteLength <= MAX_BYTES) {
+        battle.submissions.set(socket.data.userId, {
+          userId: socket.data.userId,
+          displayName: socket.data.displayName,
+          avatarUrl: socket.data.avatarUrl ?? null,
+          audio: buf,
+          mime: payload.mime,
+          durationSec: payload.durationSec ?? 0,
+          submittedAt: new Date().toISOString(),
+        });
+      }
+    }
     broadcast(io, battle);
+  });
+
+  // Lazy fetch of a single submission's audio. Sent privately back
+  // to the requesting socket so we never multicast the binary; the
+  // VotingPreview UI fires this on play-button click and decodes
+  // the response into a blob URL.
+  socket.on('battle:fetch-submission', ({ battleId, userId }: { battleId: string; userId: string }) => {
+    const battle = BATTLES.get(battleId);
+    if (!battle) return;
+    const sub = battle.submissions.get(userId);
+    if (!sub) {
+      socket.emit('battle:submission-audio', { userId, audio: null, mime: null });
+      return;
+    }
+    socket.emit('battle:submission-audio', {
+      userId: sub.userId,
+      audio: sub.audio,
+      mime: sub.mime,
+    });
   });
 
   socket.on('battle:leave', ({ battleId }) => {

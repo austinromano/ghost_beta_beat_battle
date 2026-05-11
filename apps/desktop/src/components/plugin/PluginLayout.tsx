@@ -5,6 +5,7 @@ import { useProjectStore } from '../../stores/projectStore';
 import { api } from '../../lib/api';
 import { onGlobalOnlineUsers, getSocket, type OnlineUser } from '../../lib/socket';
 import { setBattleOptOut, useBeatBattleOptOut } from '../../hooks/useBeatBattleOptOut';
+import { useBeatBattleSubmitted, clearBattleSubmitted } from '../../hooks/useBeatBattleSubmitted';
 import Avatar from '../common/Avatar';
 import ChatPanel from '../session/ChatPanel';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -381,6 +382,8 @@ export default function PluginLayout() {
   // to the lobby.
   const [showSubmitBeat, setShowSubmitBeat] = useState(false);
   const optedOutOfBattle = useBeatBattleOptOut();
+  const projectBattleId = (currentProject as any)?.battleId as string | undefined;
+  const alreadySubmittedToBattle = useBeatBattleSubmitted(projectBattleId);
   const [friends, setFriends] = useState<{ id: string; displayName: string; avatarUrl: string | null }[]>([]);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [reverting, setReverting] = useState(false);
@@ -1055,7 +1058,11 @@ export default function PluginLayout() {
                               onFilesAdded={() => fetchProject(selectedProjectId!)}
                               isBeat={isBeatView}
                               compact={trackZoom === 'half'}
-                              rightSlot={(currentProject as any)?.projectType === 'beat-battle' && !optedOutOfBattle ? (
+                              rightSlot={(currentProject as any)?.projectType === 'beat-battle' && !optedOutOfBattle && !alreadySubmittedToBattle ? (
+                                /* Submit Beat — bounces + uploads the
+                                   arrangement to the server, where it's
+                                   stored against the producer's slot in
+                                   the lobby for live voting preview. */
                                 <motion.button
                                   onClick={() => setShowSubmitBeat(true)}
                                   className="w-[150px] h-11 rounded-full text-white text-[14px] font-bold tracking-[0.08em] uppercase flex items-center justify-center gap-2 transition-all shadow-[0_2px_8px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.15)] hover:shadow-[0_0_20px_rgba(168,85,247,0.4),0_2px_8px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.2)] shrink-0"

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { useBeatBattle, type BattleParticipant } from '../../hooks/useBeatBattle';
+import { useBeatBattle, type BattleParticipant, type BattleSubmissionMeta } from '../../hooks/useBeatBattle';
 import { useBeatBattleOptOut, setBattleOptOut } from '../../hooks/useBeatBattleOptOut';
+import { clearBattleSubmitted } from '../../hooks/useBeatBattleSubmitted';
 import { useProjectStore } from '../../stores/projectStore';
 import { getSocket } from '../../lib/socket';
 
@@ -83,7 +84,20 @@ export default function BeatBattlePage() {
   // as a spectator: socket subscribes for state + chat broadcasts,
   // but the server doesn't add us to the participant set, so we can
   // watch the others compete without silently rejoining.
-  const { state: battle, chat: liveChat, setReady: emitReady, sendChat: emitChat } = useBeatBattle(ARENA_ID, { spectator: optedOut });
+  const { state: battle, chat: liveChat, setReady: emitReady, sendChat: emitChat, fetchSubmission } = useBeatBattle(ARENA_ID, { spectator: optedOut });
+
+  // When the round resets (status flips back to 'waiting'), the
+  // per-battle "I already submitted" flag has to be cleared so the
+  // Submit Beat button reappears for the next session. Track the
+  // previous status to detect the edge transition.
+  const prevStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    if (prev && prev !== 'waiting' && battle?.status === 'waiting') {
+      clearBattleSubmitted(ARENA_ID);
+    }
+    prevStatusRef.current = battle?.status ?? null;
+  }, [battle?.status]);
 
   // Adapt the server's chat message shape into the local ChatMessage
   // type the panel renders. Coloured avatars are deterministic via
@@ -369,7 +383,7 @@ export default function BeatBattlePage() {
               <div className="grid grid-cols-3 gap-4">
                 <ChatPanel chat={chat} input={chatInput} setInput={setChatInput} send={sendChat} />
                 <RulesPanel rules={SESSION_RULES} />
-                <VotingPreviewPanel />
+                <VotingPreviewPanel submissions={battle?.submissions ?? []} fetchSubmission={fetchSubmission} />
               </div>
             </div>
 
@@ -741,31 +755,132 @@ function RulesPanel({ rules }: { rules: string[] }) {
 
 // ── Voting preview panel ───────────────────────────────────────────────
 
-function VotingPreviewPanel() {
-  const tracks = ['Submission #1', 'Submission #2', 'Submission #3'];
+function VotingPreviewPanel({ submissions, fetchSubmission }: {
+  submissions: BattleSubmissionMeta[];
+  fetchSubmission: (userId: string) => Promise<Blob | null>;
+}) {
+  // Per-submission audio cache. fetchSubmission round-trips to the
+  // server the first time a user clicks play; afterwards we reuse the
+  // cached blob URL so flipping between tracks doesn't re-stream.
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Tear down every blob URL we created when the panel goes away.
+  useEffect(() => () => {
+    Object.values(urls).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* noop */ } });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Stop playback if the active submission is removed from the list
+  // (e.g. round reset clears battle.submissions on the server).
+  useEffect(() => {
+    if (!activeId) return;
+    if (!submissions.some((s) => s.userId === activeId)) {
+      try { audioRef.current?.pause(); } catch { /* noop */ }
+      setActiveId(null);
+    }
+  }, [submissions, activeId]);
+
+  async function togglePlay(s: BattleSubmissionMeta) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    // Pause whatever's currently playing if we're switching tracks.
+    if (activeId === s.userId && !audio.paused) {
+      audio.pause();
+      setActiveId(null);
+      return;
+    }
+    let url = urls[s.userId];
+    if (!url) {
+      setLoadingId(s.userId);
+      try {
+        const blob = await fetchSubmission(s.userId);
+        if (!blob) { setLoadingId(null); return; }
+        url = URL.createObjectURL(blob);
+        setUrls((prev) => ({ ...prev, [s.userId]: url! }));
+      } finally {
+        setLoadingId(null);
+      }
+    }
+    audio.src = url;
+    setActiveId(s.userId);
+    try { await audio.play(); } catch { /* user gesture pending or aborted */ }
+  }
+
   return (
     <div className="p-3 rounded-2xl" style={{ background: 'rgba(15, 12, 32, 0.92)', border: '1px solid rgba(168, 134, 255, 0.18)' }}>
       <div className="flex items-center justify-between mb-2">
         <div className="text-[9.5px] font-bold tracking-[0.18em] uppercase text-white/55">Voting Preview</div>
-        <span className="text-[9px] text-white/30">opens after submission</span>
+        <span className="text-[9px] text-white/30">
+          {submissions.length} submitted
+        </span>
       </div>
       <div className="flex flex-col gap-2">
-        {tracks.map((t, i) => (
-          <div key={i} className="flex items-center gap-2 p-1.5 rounded-md" style={{ background: 'rgba(0,0,0,0.30)' }}>
-            <button className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center"
-              style={{ background: 'rgba(168,85,247,0.20)', border: '1px solid rgba(168,85,247,0.40)' }}
-            >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="#E879F9"><polygon points="6 4 20 12 6 20 6 4" /></svg>
-            </button>
-            <div className="flex-1 min-w-0">
-              <div className="text-[10.5px] font-semibold text-white/85 truncate">{t}</div>
-              <MiniBars />
-            </div>
+        {submissions.length === 0 && (
+          <div className="text-[10.5px] text-white/35 italic px-1 py-2">
+            No submissions yet — beats will appear here as producers lock in.
           </div>
-        ))}
+        )}
+        {submissions.map((s) => {
+          const isActive = activeId === s.userId;
+          const isLoading = loadingId === s.userId;
+          return (
+            <div key={s.userId} className="flex items-center gap-2 p-1.5 rounded-md" style={{ background: 'rgba(0,0,0,0.30)' }}>
+              <button
+                onClick={() => { void togglePlay(s); }}
+                disabled={isLoading}
+                className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-colors disabled:opacity-60"
+                style={{
+                  background: isActive ? 'rgba(232,121,249,0.30)' : 'rgba(168,85,247,0.20)',
+                  border: `1px solid ${isActive ? 'rgba(232,121,249,0.60)' : 'rgba(168,85,247,0.40)'}`,
+                }}
+                title={isActive ? 'Pause' : 'Play submission'}
+              >
+                {isLoading ? (
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#E879F9" strokeWidth="3">
+                    <circle cx="12" cy="12" r="9" opacity="0.25" />
+                    <path d="M21 12a9 9 0 0 1-9 9" strokeLinecap="round">
+                      <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite" />
+                    </path>
+                  </svg>
+                ) : isActive ? (
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="#E879F9">
+                    <rect x="6" y="4" width="4" height="16" />
+                    <rect x="14" y="4" width="4" height="16" />
+                  </svg>
+                ) : (
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="#E879F9"><polygon points="6 4 20 12 6 20 6 4" /></svg>
+                )}
+              </button>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline justify-between gap-1.5">
+                  <span className="text-[10.5px] font-semibold text-white/85 truncate">{s.displayName}</span>
+                  <span className="text-[9px] text-white/35 tabular-nums shrink-0">{formatDurationShort(s.durationSec)}</span>
+                </div>
+                <MiniBars />
+              </div>
+            </div>
+          );
+        })}
       </div>
+      <audio
+        ref={audioRef}
+        onEnded={() => setActiveId(null)}
+        onPause={() => { if (audioRef.current && audioRef.current.ended) setActiveId(null); }}
+        className="hidden"
+      />
     </div>
   );
+}
+
+function formatDurationShort(sec: number): string {
+  if (!sec || sec <= 0) return '—';
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  if (m <= 0) return `${s}s`;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 // ── Right column: Session info + Prizes ────────────────────────────────

@@ -83,8 +83,19 @@ export interface ClientToServerEvents {
   'battle:leave': (data: { battleId: string }) => void;
   'battle:ready': (data: { battleId: string; ready: boolean }) => void;
   // Producer locked in their bounce — server flips submitted=true on
-  // the participant and broadcasts so the lobby shows the badge.
-  'battle:submit': (data: { battleId: string }) => void;
+  // the participant, stores the audio payload in memory, and
+  // broadcasts so the lobby shows the badge + Voting Preview lights
+  // up. audio is optional so older clients can still flag a
+  // submission even if their bounce upload fails.
+  'battle:submit': (data: {
+    battleId: string;
+    audio?: ArrayBuffer;
+    mime?: string;
+    durationSec?: number;
+  }) => void;
+  // Lazy-fetch a single submission's audio bytes (replied to the
+  // requesting socket only via battle:submission-audio).
+  'battle:fetch-submission': (data: { battleId: string; userId: string }) => void;
   // Lobby chat — text-only for v1. Server validates length, stamps
   // the message with a UUID + createdAt, and rebroadcasts to the
   // battle room.
@@ -200,6 +211,21 @@ export interface ServerToClientEvents {
       avatarUrl: string | null;
       ready: boolean;
       joinedAt: string;
+      // submitted flips to true once the producer's bounce has been
+      // received by the server. Renders the "submitted" badge in
+      // the players grid and powers the Voting Preview list.
+      submitted?: boolean;
+    }>;
+    // Metadata only — audio bytes ship on demand via the
+    // battle:fetch-submission round-trip so state broadcasts stay
+    // small.
+    submissions?: Array<{
+      userId: string;
+      displayName: string;
+      avatarUrl: string | null;
+      mime: string;
+      durationSec: number;
+      submittedAt: string;
     }>;
     // ISO timestamps for client-side countdowns. startsAt is non-null
     // while status='starting' (5 s lobby countdown). endsAt is non-
@@ -207,6 +233,14 @@ export interface ServerToClientEvents {
     // (poll phase). Both null while 'waiting'.
     startsAt: string | null;
     endsAt: string | null;
+  }) => void;
+  // Private response to a battle:fetch-submission request. audio is
+  // null when the submission isn't on the server (e.g. older client
+  // that flagged submitted without sending the bytes).
+  'battle:submission-audio': (data: {
+    userId: string;
+    audio: ArrayBuffer | Buffer | null;
+    mime: string | null;
   }) => void;
   'battle:message': (data: {
     id: string;
