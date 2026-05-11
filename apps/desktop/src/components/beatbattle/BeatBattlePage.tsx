@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useBeatBattle, type BattleParticipant } from '../../hooks/useBeatBattle';
 import { useProjectStore } from '../../stores/projectStore';
+import { getSocket } from '../../lib/socket';
 
 // Beat Battle — Ghost Session's live producer competition mode.
 // Top-level page rendered from PluginLayout when the user picks the
@@ -126,20 +127,33 @@ export default function BeatBattlePage() {
   // they can actually start cooking. PluginLayout listens for the
   // 'ghost-open-project' event and will route us out of the lobby and
   // into the new project. Keyed off (battleId × startsAt) so we create
-  // exactly one project per session — even if BeatBattlePage remounts
-  // (e.g. user navigates back to the lobby mid-session).
+  // exactly one project per session — but cached as `sessionKey|projectId`
+  // so that a remount mid-session (e.g. user navigates back to the
+  // lobby and the battle is still active) re-routes to the same project
+  // instead of failing silently because the create was already done.
   const createProject = useProjectStore((s) => s.createProject);
   const autoOpenedRef = useRef<string | null>(null);
   useEffect(() => {
     if (status !== 'active' || !battle) return;
     const sessionKey = `${battle.battleId}::${battle.startsAt ?? ''}`;
     if (autoOpenedRef.current === sessionKey) return;
-    const persistedKey = 'beat-battle-auto-opened';
-    if (localStorage.getItem(persistedKey) === sessionKey) {
-      autoOpenedRef.current = sessionKey;
-      return;
-    }
     autoOpenedRef.current = sessionKey;
+
+    const persistedKey = 'beat-battle-auto-opened';
+    const persistedRaw = localStorage.getItem(persistedKey);
+    // Stored as `${sessionKey}|${projectId}`. If we recognise the
+    // session AND have a remembered projectId, just open it. Old-format
+    // entries (sessionKey only, no `|projectId`) are treated as stale
+    // and ignored — the user gets a fresh project they can actually
+    // navigate into.
+    if (persistedRaw && persistedRaw.startsWith(sessionKey + '|')) {
+      const existingId = persistedRaw.slice(sessionKey.length + 1);
+      if (existingId) {
+        window.dispatchEvent(new CustomEvent('ghost-open-project', { detail: { projectId: existingId } }));
+        return;
+      }
+    }
+
     (async () => {
       try {
         const name = `Beat Battle — ${battle.kit ?? 'Royale'}`;
@@ -149,10 +163,14 @@ export default function BeatBattlePage() {
           battleId: battle.battleId,
           battleEndsAt: battle.endsAt,
         });
-        localStorage.setItem(persistedKey, sessionKey);
+        localStorage.setItem(persistedKey, `${sessionKey}|${p.id}`);
         window.dispatchEvent(new CustomEvent('ghost-open-project', { detail: { projectId: p.id } }));
-      } catch {
+      } catch (err) {
+        // Reset the ref so the next render attempts again — without
+        // this a transient network blip would lock the user out of
+        // production for the rest of the session.
         autoOpenedRef.current = null;
+        if (import.meta.env.DEV) console.warn('[BeatBattle] auto-open failed:', err);
       }
     })();
   }, [status, battle?.battleId, battle?.startsAt, battle?.endsAt, battle?.kit, createProject]);
@@ -187,6 +205,18 @@ export default function BeatBattlePage() {
   const readyCount = (battle?.participants ?? []).filter((p) => p.ready).length;
   const joinedCount = battle?.participants.length ?? 0;
   const maxPlayers = battle?.maxPlayers ?? 8;
+
+  // Bail out of the battle entirely: drop the socket-level participant
+  // record, clear the auto-open memo so the next session creates a
+  // fresh project, and tell PluginLayout to flip back to the home dock.
+  const quitBattle = () => {
+    try {
+      const socket = getSocket();
+      socket?.emit('battle:leave', { battleId: ARENA_ID });
+    } catch { /* socket may be down — server cleanup will catch us */ }
+    try { localStorage.removeItem('beat-battle-auto-opened'); } catch { /* quota */ }
+    window.dispatchEvent(new CustomEvent('ghost-go-home'));
+  };
 
   return (
     <div className="flex-1 min-h-0 flex flex-col" style={{ background: 'linear-gradient(180deg, #0E0620 0%, #07030F 100%)' }}>
@@ -227,6 +257,19 @@ export default function BeatBattlePage() {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="#FBBF24"><circle cx="12" cy="12" r="9" /></svg>
             <span className="text-[12px] font-semibold tabular-nums text-white">1,250</span>
           </span>
+          <button
+            onClick={quitBattle}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full transition-colors"
+            style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.35)', color: '#F87171' }}
+            title="Leave the battle and return home"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            <span className="text-[11px] font-bold tracking-[0.12em] uppercase">Quit</span>
+          </button>
         </span>
       </div>
 

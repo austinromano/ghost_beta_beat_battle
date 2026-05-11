@@ -13,9 +13,13 @@ interface Props {
   // determined by the lobby, and the project is a single-author sprint
   // until production wraps.
   hideSocial?: boolean;
+  // Quit CTA wired only by Beat Battle projects. Leaves the battle on
+  // the socket and routes the user home. When omitted (regular
+  // projects), no button renders.
+  onQuitBattle?: () => void;
 }
 
-export default function CollaboratorsBar({ members, onlineUsers, onInvite, onRecord, hideSocial }: Props) {
+export default function CollaboratorsBar({ members, onlineUsers, onInvite, onRecord, hideSocial, onQuitBattle }: Props) {
   // Host goes LAST in the cluster so the host avatar sits immediately next
   // to the host name/HOST badge to its right.
   const sorted = [...members].sort((a, b) => (a.role === 'owner' ? 1 : b.role === 'owner' ? -1 : 0));
@@ -82,6 +86,23 @@ export default function CollaboratorsBar({ members, onlineUsers, onInvite, onRec
             </span>
           </div>
         </div>
+        {hideSocial && onQuitBattle && (
+          <motion.button
+            onClick={onQuitBattle}
+            className="h-11 px-4 rounded-full text-white text-[13px] font-bold tracking-[0.06em] uppercase flex items-center justify-center gap-2 transition-all shadow-[0_2px_8px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.15)] hover:shadow-[0_0_20px_rgba(239,68,68,0.4),0_2px_8px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.2)] shrink-0"
+            style={{ background: 'linear-gradient(180deg, #ef4444 0%, #991b1b 100%)' }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            title="Quit Beat Battle"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            Quit Battle
+          </motion.button>
+        )}
         {!hideSocial && (
           <>
             {/* Vertical-cam record button — opens the 9:16 capture overlay

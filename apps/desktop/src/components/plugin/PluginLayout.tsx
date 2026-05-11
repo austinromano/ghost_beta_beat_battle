@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { useAuthStore } from '../../stores/authStore';
 import { useProjectStore } from '../../stores/projectStore';
 import { api } from '../../lib/api';
-import { onGlobalOnlineUsers, type OnlineUser } from '../../lib/socket';
+import { onGlobalOnlineUsers, getSocket, type OnlineUser } from '../../lib/socket';
 import Avatar from '../common/Avatar';
 import ChatPanel from '../session/ChatPanel';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -481,6 +481,16 @@ export default function PluginLayout() {
     const openSettings = () => { setShowSettings(true); setShowNotifs(false); };
     window.addEventListener('ghost-open-settings', openSettings);
     return () => window.removeEventListener('ghost-open-settings', openSettings);
+  }, []);
+
+  // 'ghost-go-home' is what the Beat Battle Quit buttons dispatch after
+  // they've already cleaned up their own socket state. We just need to
+  // route the user back to the home dock and tear down any open
+  // project so they don't end up on a half-loaded battle screen.
+  useEffect(() => {
+    const goHome = () => { goTo('home'); };
+    window.addEventListener('ghost-go-home', goHome);
+    return () => window.removeEventListener('ghost-go-home', goHome);
   }, []);
 
   // Always land on WelcomeHero when the plugin opens — user picks a project
@@ -986,6 +996,14 @@ export default function PluginLayout() {
                             onInvite={() => setShowInvite(!showInvite)}
                             onRecord={() => setShowRecord(true)}
                             hideSocial={(currentProject as any)?.projectType === 'beat-battle'}
+                            onQuitBattle={(currentProject as any)?.projectType === 'beat-battle' ? () => {
+                              try {
+                                const bid = (currentProject as any)?.battleId;
+                                if (bid) getSocket()?.emit('battle:leave', { battleId: bid });
+                              } catch { /* socket may be down */ }
+                              try { localStorage.removeItem('beat-battle-auto-opened'); } catch { /* quota */ }
+                              window.dispatchEvent(new CustomEvent('ghost-go-home'));
+                            } : undefined}
                           />
 
                           <ArrangementDropZone projectId={selectedProjectId!} onFilesAdded={() => fetchProject(selectedProjectId!)}>
