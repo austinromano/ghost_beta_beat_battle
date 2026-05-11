@@ -123,6 +123,21 @@ app.use('/assets/*', serveStatic({ root: './public' }));
 app.use('/assets/*', serveStatic({ root: '../desktop/dist' }));
 app.get('/sw.js', serveStatic({ root: './public', path: '/sw.js' }));
 app.get('/sw.js', serveStatic({ root: '../desktop/dist', path: '/sw.js' }));
+// Specific root-level static files. The base serveStatic above only
+// covers /assets and /sw.js, so any file dropped into ./public for
+// direct root access (PNG hero backgrounds, worklets, favicons, etc.)
+// needs an explicit route. Hono's route matcher doesn't support
+// glob brace expansion, so we list the files we actually serve.
+app.get('/beat-battle-hero.png', serveStatic({ root: './public', path: '/beat-battle-hero.png' }));
+app.get('/beat-battle-hero.png', serveStatic({ root: '../desktop/dist', path: '/beat-battle-hero.png' }));
+app.get('/ghost-watermark.png', serveStatic({ root: './public', path: '/ghost-watermark.png' }));
+app.get('/ghost-watermark.png', serveStatic({ root: '../desktop/dist', path: '/ghost-watermark.png' }));
+app.get('/master-limiter-worklet.js', serveStatic({ root: './public', path: '/master-limiter-worklet.js' }));
+app.get('/master-limiter-worklet.js', serveStatic({ root: '../desktop/dist', path: '/master-limiter-worklet.js' }));
+app.get('/track-compressor-worklet.js', serveStatic({ root: './public', path: '/track-compressor-worklet.js' }));
+app.get('/track-compressor-worklet.js', serveStatic({ root: '../desktop/dist', path: '/track-compressor-worklet.js' }));
+app.get('/warped-playback-worklet.js', serveStatic({ root: './public', path: '/warped-playback-worklet.js' }));
+app.get('/warped-playback-worklet.js', serveStatic({ root: '../desktop/dist', path: '/warped-playback-worklet.js' }));
 app.get('/', serveStatic({ root: './public', path: '/index.html' }));
 app.get('/', serveStatic({ root: '../desktop/dist', path: '/index.html' }));
 
