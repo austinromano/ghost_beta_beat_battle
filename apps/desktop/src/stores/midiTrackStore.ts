@@ -853,6 +853,25 @@ export const useMidiTrack = create<MidiTrackState>((set, get) => ({
           // the AudioBufferSourceNode is GC-eligible. +50 ms guard
           // covers any sub-quantum scheduling jitter.
           src.stop(noteOff + inst.releaseSec + 0.05);
+          // Broadcast playback to the Sampler UI so it can render a
+          // live cursor sweeping across the waveform. Timing is in
+          // audio-context seconds; the listener subtracts ctx.now to
+          // get an elapsed-in-sample time it can convert to a pixel
+          // position. Total render lifetime ends at noteOff + release
+          // + a small tail so the cursor doesn't snap off mid-decay.
+          if (typeof window !== 'undefined') {
+            const totalDur = (noteOff - when) + inst.releaseSec + 0.05;
+            window.dispatchEvent(new CustomEvent('ghost-sampler-voice', {
+              detail: {
+                trackId: clip.trackId,
+                whenCtx: when,
+                startBufSec,
+                endBufSec,
+                playbackRate: src.playbackRate.value,
+                totalDur,
+              },
+            }));
+          }
 
           // Polyphony cap — drop the oldest voice on this track if we
           // hit the limit. Keeps CPU bounded on long held chords.

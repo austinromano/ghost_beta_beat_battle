@@ -47,10 +47,26 @@ export function previewKey(pitch: number, buffer: AudioBuffer | undefined, baseN
   src.connect(g);
   // Per-track FX bus when we know the track, master otherwise.
   g.connect(trackId ? getMidiTrackBus(trackId) : getMaster());
-  src.start();
+  const when = ctx.currentTime;
+  src.start(when);
   src.onended = () => {
     try { src.disconnect(); g.disconnect(); } catch { /* ignore */ }
   };
+  // Mirror the MIDI scheduler's `ghost-sampler-voice` event so the
+  // Sampler's waveform shows a cursor sweep when the user previews
+  // a key from the piano-roll keyboard column.
+  if (trackId && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('ghost-sampler-voice', {
+      detail: {
+        trackId,
+        whenCtx: when,
+        startBufSec: 0,
+        endBufSec: buffer.duration,
+        playbackRate: src.playbackRate.value,
+        totalDur: buffer.duration / Math.max(0.01, src.playbackRate.value) + 0.1,
+      },
+    }));
+  }
 }
 
 function PianoRollKeyboardInner({ lowPitch, highPitch, pitchHeight, width, previewBuffer, previewBaseNote, previewVolume, previewTrackId }: Props) {

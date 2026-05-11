@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useMidiTrack } from '../../stores/midiTrackStore';
 import { useProjectStore } from '../../stores/projectStore';
 import { audioBufferCache, getAudioData } from '../../lib/audio';
@@ -461,6 +462,71 @@ function SamplerWaveform({ inst, trackId, setSamplerRange }: {
   const startPct = (inst?.startOffset ?? 0) * 100;
   const endPct = (inst?.endOffset ?? 1) * 100;
 
+  // Live playback cursors. The MIDI scheduler (and keyboard preview)
+  // dispatch `ghost-sampler-voice` whenever they fire a BufferSource;
+  // we keep a small list of currently-active voices and use RAF to
+  // recompute each one's playhead position inside the buffer. Each
+  // voice fades out (and gets pruned) once its total lifetime
+  // elapses. State is rendered as positioned divs over the canvas.
+  type Voice = {
+    id: number;
+    whenCtx: number;
+    startBufSec: number;
+    endBufSec: number;
+    playbackRate: number;
+    totalDur: number;
+  };
+  const [activeVoices, setActiveVoices] = useState<Array<{ id: number; xPct: number; alpha: number }>>([]);
+  const voicesRef = useRef<Voice[]>([]);
+  const nextVoiceIdRef = useRef(1);
+  useEffect(() => {
+    const onVoice = (e: Event) => {
+      const ce = e as CustomEvent;
+      if (!ce.detail || ce.detail.trackId !== trackId) return;
+      const id = nextVoiceIdRef.current++;
+      voicesRef.current.push({
+        id,
+        whenCtx: ce.detail.whenCtx,
+        startBufSec: ce.detail.startBufSec,
+        endBufSec: ce.detail.endBufSec,
+        playbackRate: ce.detail.playbackRate,
+        totalDur: ce.detail.totalDur,
+      });
+    };
+    window.addEventListener('ghost-sampler-voice', onVoice as EventListener);
+    return () => window.removeEventListener('ghost-sampler-voice', onVoice as EventListener);
+  }, [trackId]);
+  useEffect(() => {
+    let raf = 0;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      const bufDur = inst?.buffer?.duration ?? 0;
+      const ctxNow = getCtx().currentTime;
+      // Drop voices whose lifetime has elapsed. Keeps the list bounded
+      // even on long sustained patches.
+      voicesRef.current = voicesRef.current.filter((v) => ctxNow < v.whenCtx + v.totalDur + 0.05);
+      // Compute each voice's current position in the buffer and an
+      // overall alpha that pulses bright at attack and tails off on
+      // release. The "phase" 0..1 is normalised over totalDur so the
+      // alpha curve respects the user's release setting.
+      const next = voicesRef.current.map((v) => {
+        const elapsedSinceStart = Math.max(0, ctxNow - v.whenCtx);
+        const bufPos = v.startBufSec + elapsedSinceStart * v.playbackRate;
+        const clampedBuf = Math.min(bufDur, Math.max(0, bufPos));
+        const xPct = bufDur > 0 ? (clampedBuf / bufDur) * 100 : 0;
+        const phase = Math.min(1, elapsedSinceStart / Math.max(0.01, v.totalDur));
+        // Fast attack (full brightness in first ~30 ms), gentle
+        // exponential decay over the rest of the voice's lifetime.
+        const attack = Math.min(1, elapsedSinceStart / 0.03);
+        const decay = Math.pow(1 - phase, 1.6);
+        return { id: v.id, xPct, alpha: attack * (0.55 + 0.45 * decay) };
+      });
+      setActiveVoices(next);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [inst?.buffer]);
+
   return (
     <div
       ref={wrapRef}
@@ -522,6 +588,30 @@ function SamplerWaveform({ inst, trackId, setSamplerRange }: {
           <div className="text-[8.5px] font-mono text-white/45 mb-0.5 text-center">{m.label}</div>
         </div>
       ))}
+      {/* Live playback cursors — one vertical line per active voice
+          sweeping across the waveform at the buffer's read position.
+          Wrapped in framer-motion so each cursor fades in on attack
+          and tails off through the voice's release. */}
+      <AnimatePresence>
+        {activeVoices.map((v) => (
+          <motion.div
+            key={v.id}
+            className="absolute top-0 bottom-0 pointer-events-none"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: v.alpha }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.08, ease: 'linear' }}
+            style={{
+              left: `${v.xPct}%`,
+              width: 2,
+              marginLeft: -1,
+              background: 'linear-gradient(180deg, rgba(232, 213, 255, 0.95) 0%, rgba(168, 85, 247, 0.75) 100%)',
+              boxShadow: '0 0 10px rgba(168,85,247,0.75), 0 0 22px rgba(232,121,249,0.45)',
+              borderRadius: 1,
+            }}
+          />
+        ))}
+      </AnimatePresence>
     </div>
   );
 }
