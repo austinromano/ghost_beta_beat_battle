@@ -91,13 +91,23 @@ export default function BeatBattlePage() {
   // per-battle "I already submitted" flag has to be cleared so the
   // Submit Beat button reappears for the next session. Track the
   // previous status to detect the edge transition.
-  const prevStatusRef = useRef<string | null>(null);
+  // Drop the submitted flag whenever the lobby is observed in a
+  // pre-active state. Covers two paths we previously missed:
+  //   1. user submitted, closed the app between rounds, re-opens
+  //      while status is 'waiting' — without this they'd be locked
+  //      out of auto-open with no recourse;
+  //   2. round reset while the user was inside a project (lobby
+  //      unmounted, edge transition missed) — flag persists, blocks
+  //      next production phase. First mount on the new lobby sees
+  //      'waiting' and clears.
+  // We deliberately do NOT clear during 'active' / 'voting' — those
+  // are the same round the user just submitted to, and the flag
+  // should stay set so the Submit button stays hidden and auto-open
+  // stays disabled.
   useEffect(() => {
-    const prev = prevStatusRef.current;
-    if (prev && prev !== 'waiting' && battle?.status === 'waiting') {
+    if (battle?.status === 'waiting' || battle?.status === 'starting') {
       clearBattleSubmitted(ARENA_ID);
     }
-    prevStatusRef.current = battle?.status ?? null;
   }, [battle?.status]);
 
   // Adapt the server's chat message shape into the local ChatMessage
