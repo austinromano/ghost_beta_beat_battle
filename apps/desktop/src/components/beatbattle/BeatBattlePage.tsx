@@ -217,9 +217,18 @@ export default function BeatBattlePage() {
         const p = await createProject({
           name,
           projectType: 'beat-battle',
+          // Beat Battle projects need a concrete tempo + time signature
+          // out of the gate — the arrangement grid falls back to 120
+          // when projectBpm <= 0 but several scheduler paths (warp,
+          // drum stepping, MIDI snapping) bail when bpm <= 0, which
+          // makes audio play at native speed while the grid still
+          // renders at 120 → visible timing drift in the arrangement.
+          // Persisting 120/4/4 keeps every code path in sync.
+          tempo: 120,
+          timeSignature: '4/4',
           battleId: battle.battleId,
           battleEndsAt: battle.endsAt,
-        });
+        } as any);
         localStorage.setItem(persistedKey, `${sessionKey}|${p.id}`);
         // One-shot cleanup of the legacy unscoped key so multi-account
         // browsers don't keep tripping over the stale cross-account
