@@ -331,12 +331,15 @@ export default function CompressorPanel({
 
   return (
     <div
-      className="rounded-xl select-none"
+      className="rounded-xl select-none flex flex-col"
       style={{
         width: PANEL_W,
         // Locked to the same pixel height as ChannelEqPanel /
         // ReverbPanel / SamplerChainCard so every device in the chain
-        // rail lines up regardless of how its content sizes.
+        // rail lines up regardless of how its content sizes. flex-col
+        // pins the header to the top and the knob row to the bottom
+        // — the meters + curve + readouts block sits in the middle
+        // and a flex-1 spacer fills any remaining gap.
         height: 296,
         background: 'rgba(15, 12, 32, 0.92)',
         border: '1px solid rgba(168, 134, 255, 0.18)',
@@ -526,11 +529,16 @@ export default function CompressorPanel({
         </div>
       </div>
 
+      {/* Flexible spacer — soaks up the extra room the 296 px panel
+          height left over after header + body + knob row, so the
+          knob row sticks to the bottom edge instead of leaving a
+          gap below it. */}
+      <div className="flex-1" />
       {/* Knob row — Threshold / Ratio / Attack / Release / Makeup.
           Drag vertically. Threshold + Ratio also live as draggable
           knees on the transfer curve above; both controls bind to
           the same store field. */}
-      <div className="flex items-center justify-around px-2 pt-1 pb-2">
+      <div className="flex items-center justify-around px-2 pt-1 pb-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
         <Knob
           label={formatThreshold(threshold)}
           caption="Thresh"

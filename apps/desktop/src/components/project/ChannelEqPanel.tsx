@@ -262,12 +262,14 @@ export default function ChannelEqPanel({
 
   return (
     <div
-      className="rounded-xl select-none"
+      className="rounded-xl select-none flex flex-col"
       style={{
         width: VIEW_W + 24,
         // Locked to PANEL_HEIGHT — CompressorPanel + ReverbPanel +
         // SamplerChainCard all use 296 so every device card lines up
-        // at the same pixel height in the chain rail.
+        // at the same pixel height in the chain rail. flex-col lets
+        // the band readout row claim the remaining space below the
+        // graph instead of leaving an empty gap at the bottom.
         height: 296,
         background: 'rgba(15, 12, 32, 0.92)',
         border: '1px solid rgba(168, 134, 255, 0.18)',
@@ -490,8 +492,11 @@ export default function ChannelEqPanel({
         </svg>
       </div>
 
-      {/* Band readouts — simple label / Hz / dB stack per band. */}
-      <div className="grid grid-cols-4 gap-2 px-3 pt-1 pb-3">
+      {/* Band readouts — simple label / Hz / dB stack per band. The
+          flex-1 wrapper claims the empty space below the graph and
+          centers the readouts vertically so they don't collapse to
+          the top of the available room. */}
+      <div className="flex-1 grid grid-cols-4 gap-2 px-3 items-center border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
         {bands.map((band, idx) => (
           <div key={idx} className="flex flex-col items-center text-center">
             <span className="text-[9.5px] text-white/45 uppercase tracking-wider">{EQ_BAND_LABELS[idx]}</span>
