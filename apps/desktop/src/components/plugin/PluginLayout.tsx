@@ -1001,6 +1001,11 @@ export default function PluginLayout() {
                                 const bid = (currentProject as any)?.battleId;
                                 if (bid) getSocket()?.emit('battle:leave', { battleId: bid });
                               } catch { /* socket may be down */ }
+                              // Persist the opt-out so re-opening Beat Battle
+                              // from the dock does NOT silently rejoin the
+                              // user. The lobby page reads this on mount and
+                              // renders a "Rejoin" splash instead.
+                              try { localStorage.setItem('beat-battle-opted-out', '1'); } catch { /* quota */ }
                               try { localStorage.removeItem('beat-battle-auto-opened'); } catch { /* quota */ }
                               window.dispatchEvent(new CustomEvent('ghost-go-home'));
                             } : undefined}

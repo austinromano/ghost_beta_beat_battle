@@ -56,6 +56,12 @@ const SESSION_RULES = [
   'Top 3 split the pot — anonymous tally',
 ];
 
+// Persistent flag set by the Quit Battle button. While truthy, the
+// page renders a "Rejoin" splash instead of auto-joining the lobby,
+// so visiting the controller dock after a quit does NOT silently
+// re-add the user as a battle participant.
+const OPT_OUT_KEY = 'beat-battle-opted-out';
+
 export default function BeatBattlePage() {
   const [tab, setTab] = useState<LobbyTab>('lobby');
   const [chatInput, setChatInput] = useState('');
@@ -70,10 +76,18 @@ export default function BeatBattlePage() {
     return () => clearInterval(t);
   }, []);
 
+  // Opt-out state. Drives whether we subscribe to battle:state events
+  // (joining the socket room + participant set) or render the rejoin
+  // splash. Persisted across mounts via OPT_OUT_KEY.
+  const [optedOut, setOptedOut] = useState<boolean>(() => {
+    try { return localStorage.getItem(OPT_OUT_KEY) === '1'; } catch { return false; }
+  });
+
   // Live lobby state via socket. battle.participants is the real list
   // of producers in the room; me.ready is what the Ready Up button
-  // toggles; chat is the live message thread.
-  const { state: battle, chat: liveChat, setReady: emitReady, sendChat: emitChat } = useBeatBattle(ARENA_ID);
+  // toggles; chat is the live message thread. Passing null while
+  // opted-out keeps the hook idle so we don't re-join the battle.
+  const { state: battle, chat: liveChat, setReady: emitReady, sendChat: emitChat } = useBeatBattle(optedOut ? null : ARENA_ID);
 
   // Adapt the server's chat message shape into the local ChatMessage
   // type the panel renders. Coloured avatars are deterministic via
@@ -207,15 +221,27 @@ export default function BeatBattlePage() {
   const maxPlayers = battle?.maxPlayers ?? 8;
 
   // Bail out of the battle entirely: drop the socket-level participant
-  // record, clear the auto-open memo so the next session creates a
-  // fresh project, and tell PluginLayout to flip back to the home dock.
+  // record, persist the opt-out flag so the next mount of this page
+  // (e.g. user clicks the controller dock again) does NOT auto-rejoin,
+  // clear the auto-open memo so the next session creates a fresh
+  // project, and tell PluginLayout to flip back to the home dock.
   const quitBattle = () => {
     try {
       const socket = getSocket();
       socket?.emit('battle:leave', { battleId: ARENA_ID });
     } catch { /* socket may be down — server cleanup will catch us */ }
+    try { localStorage.setItem(OPT_OUT_KEY, '1'); } catch { /* quota */ }
     try { localStorage.removeItem('beat-battle-auto-opened'); } catch { /* quota */ }
+    setOptedOut(true);
     window.dispatchEvent(new CustomEvent('ghost-go-home'));
+  };
+
+  // Reverse of quitBattle — wired to the "Rejoin Battle" CTA on the
+  // opt-out splash. Clearing the flag re-arms useBeatBattle below,
+  // which fires battle:join on its next mount and pulls fresh state.
+  const rejoinBattle = () => {
+    try { localStorage.removeItem(OPT_OUT_KEY); } catch { /* quota */ }
+    setOptedOut(false);
   };
 
   return (
@@ -257,23 +283,56 @@ export default function BeatBattlePage() {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="#FBBF24"><circle cx="12" cy="12" r="9" /></svg>
             <span className="text-[12px] font-semibold tabular-nums text-white">1,250</span>
           </span>
-          <button
-            onClick={quitBattle}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-full transition-colors"
-            style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.35)', color: '#F87171' }}
-            title="Leave the battle and return home"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-            <span className="text-[11px] font-bold tracking-[0.12em] uppercase">Quit</span>
-          </button>
+          {!optedOut && (
+            <button
+              onClick={quitBattle}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full transition-colors"
+              style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.35)', color: '#F87171' }}
+              title="Leave the battle and return home"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+              <span className="text-[11px] font-bold tracking-[0.12em] uppercase">Quit</span>
+            </button>
+          )}
         </span>
       </div>
 
-      {tab !== 'lobby' ? (
+      {optedOut ? (
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="text-center max-w-md">
+            <div
+              className="w-16 h-16 mx-auto mb-5 rounded-2xl flex items-center justify-center"
+              style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.30)' }}
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F87171" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </div>
+            <div className="text-[22px] font-bold text-white mb-2">You've left the battle</div>
+            <div className="text-[13px] text-white/55 mb-6">
+              You won't be counted as a participant or pulled into production sessions until you rejoin.
+            </div>
+            <button
+              onClick={rejoinBattle}
+              className="px-6 py-2.5 rounded-lg text-[13px] font-bold tracking-[0.12em] uppercase transition-all"
+              style={{
+                background: 'linear-gradient(180deg, #a855f7 0%, #7c3aed 100%)',
+                color: '#ffffff',
+                border: '1px solid rgba(168, 85, 247, 0.55)',
+                boxShadow: '0 6px 16px rgba(124, 58, 237, 0.45)',
+              }}
+            >
+              Rejoin Battle
+            </button>
+          </div>
+        </div>
+      ) : tab !== 'lobby' ? (
         <div className="flex-1 flex items-center justify-center text-center">
           <div>
             <div className="text-[14px] font-bold tracking-wider uppercase text-purple-300/70 mb-2">
