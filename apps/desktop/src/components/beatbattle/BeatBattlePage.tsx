@@ -56,8 +56,17 @@ const SESSION_RULES = [
 
 export default function BeatBattlePage() {
   const [tab, setTab] = useState<LobbyTab>('lobby');
-  const [secondsLeft, setSecondsLeft] = useState(165);
   const [chatInput, setChatInput] = useState('');
+  // Local RAF-ish counter that re-renders the countdown each second.
+  // The actual target time comes from battle.startsAt or
+  // battle.endsAt — this just forces a re-render so the displayed
+  // value ticks down. Server is the source of truth on the actual
+  // phase transitions.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
 
   // Live lobby state via socket. battle.participants is the real list
   // of producers in the room; me.ready is what the Ready Up button
@@ -98,11 +107,19 @@ export default function BeatBattlePage() {
     void battle;
   }, [battle]);
 
-  // Countdown — purely cosmetic; resets at 0.
-  useEffect(() => {
-    const t = setInterval(() => setSecondsLeft((s) => (s > 0 ? s - 1 : 165)), 1000);
-    return () => clearInterval(t);
-  }, []);
+  // Derive the headline countdown from the live battle state. While
+  // 'starting' we count down to startsAt (the 5-second lobby kick-
+  // off). While 'active' or 'voting' we count down to endsAt. While
+  // 'waiting' we show 00:00 so the user sees we're idle.
+  const status = battle?.status ?? 'waiting';
+  const target = status === 'starting'
+    ? battle?.startsAt ?? null
+    : (status === 'active' || status === 'voting')
+      ? battle?.endsAt ?? null
+      : null;
+  const secondsLeft = target
+    ? Math.max(0, Math.ceil((Date.parse(target) - now) / 1000))
+    : 0;
 
   const sendChat = () => {
     const trimmed = chatInput.trim();
@@ -196,6 +213,8 @@ export default function BeatBattlePage() {
             {/* Left + center column */}
             <div className="flex flex-col gap-5">
               <Hero
+                status={status}
+                kit={battle?.kit ?? 'Trap Essentials'}
                 secondsLeft={secondsLeft}
                 fmtTime={fmtTime}
                 ready={ready}
@@ -271,7 +290,9 @@ export default function BeatBattlePage() {
 
 // ── Hero card with countdown + ready up ─────────────────────────────────
 
-function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount, joinedCount, maxPlayers, prizePool }: {
+function Hero({ status, kit, secondsLeft, fmtTime, ready, onReady, readyCount, joinedCount, maxPlayers, prizePool }: {
+  status: 'waiting' | 'starting' | 'active' | 'voting' | 'complete';
+  kit: string;
   secondsLeft: number;
   fmtTime: (s: number) => string;
   ready: boolean;
@@ -281,6 +302,10 @@ function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount, joinedCount, m
   maxPlayers: number;
   prizePool: number;
 }) {
+  const phaseLabel = status === 'starting' ? 'Starting in'
+    : status === 'active' ? 'Production phase'
+    : status === 'voting' ? 'Voting closes in'
+    : 'Session starts in';
   return (
     <div className="grid grid-cols-[1fr_360px] gap-5">
       <div
@@ -351,7 +376,20 @@ function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount, joinedCount, m
       <div className="flex flex-col p-4 rounded-2xl"
         style={{ background: 'rgba(15, 12, 32, 0.92)', border: '1px solid rgba(168, 134, 255, 0.22)' }}
       >
-        <div className="text-[8.5px] font-bold tracking-[0.18em] uppercase text-white/45 mb-1">Session starts in</div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[8.5px] font-bold tracking-[0.18em] uppercase text-white/45">{phaseLabel}</span>
+          {(status === 'active' || status === 'voting') && (
+            <span className="px-1.5 py-0.5 rounded text-[8.5px] font-bold tracking-[0.14em] uppercase"
+              style={{
+                background: 'rgba(232,121,249,0.18)',
+                color: '#E879F9',
+                border: '1px solid rgba(232,121,249,0.40)',
+              }}
+            >
+              {status === 'active' ? 'Live · ' + kit : 'Vote'}
+            </span>
+          )}
+        </div>
         <motion.div
           key={Math.floor(secondsLeft / 5)}
           initial={{ scale: 0.96, opacity: 0.85 }}
@@ -361,19 +399,38 @@ function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount, joinedCount, m
         >
           {fmtTime(secondsLeft)}
         </motion.div>
-        <div className="text-[11px] text-white/55 mt-1">Get ready to start producing</div>
-        <button
-          onClick={onReady}
-          className="mt-3 px-4 py-2 rounded-lg text-[12px] font-bold tracking-[0.12em] uppercase transition-colors"
-          style={{
-            background: ready ? 'rgba(16, 185, 129, 0.20)' : 'linear-gradient(180deg, #a855f7 0%, #7c3aed 100%)',
-            color: ready ? '#34D399' : '#ffffff',
-            border: ready ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid rgba(168, 85, 247, 0.55)',
-            boxShadow: ready ? 'none' : '0 6px 16px rgba(124, 58, 237, 0.45)',
-          }}
-        >
-          {ready ? '✓ Ready' : 'Ready Up'}
-        </button>
+        <div className="text-[11px] text-white/55 mt-1">
+          {status === 'starting' && 'Lobby filling — hold tight'}
+          {status === 'active' && 'Make your beat. Time is ticking.'}
+          {status === 'voting' && 'Vote for your favourite submissions'}
+          {status === 'waiting' && 'Get ready to start producing'}
+        </div>
+        {status === 'waiting' || status === 'starting' ? (
+          <button
+            onClick={onReady}
+            disabled={status === 'starting' && ready}
+            className="mt-3 px-4 py-2 rounded-lg text-[12px] font-bold tracking-[0.12em] uppercase transition-colors disabled:opacity-70"
+            style={{
+              background: ready ? 'rgba(16, 185, 129, 0.20)' : 'linear-gradient(180deg, #a855f7 0%, #7c3aed 100%)',
+              color: ready ? '#34D399' : '#ffffff',
+              border: ready ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid rgba(168, 85, 247, 0.55)',
+              boxShadow: ready ? 'none' : '0 6px 16px rgba(124, 58, 237, 0.45)',
+            }}
+          >
+            {ready ? '✓ Ready' : 'Ready Up'}
+          </button>
+        ) : (
+          <div
+            className="mt-3 px-4 py-2 rounded-lg text-[12px] font-bold tracking-[0.12em] uppercase text-center"
+            style={{
+              background: 'rgba(168, 85, 247, 0.18)',
+              color: '#E879F9',
+              border: '1px dashed rgba(168, 85, 247, 0.45)',
+            }}
+          >
+            {status === 'active' ? 'Session in progress' : 'Voting'}
+          </div>
+        )}
         <div className="text-[10px] text-white/45 mt-2 text-center">
           {readyCount}/{maxPlayers} players ready
         </div>

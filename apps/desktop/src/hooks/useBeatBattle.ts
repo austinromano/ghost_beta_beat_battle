@@ -22,6 +22,8 @@ export interface BattleState {
   prizePool: number;
   maxPlayers: number;
   participants: BattleParticipant[];
+  startsAt: string | null;
+  endsAt: string | null;
 }
 
 export interface BattleChatMessage {

@@ -195,6 +195,12 @@ export interface ServerToClientEvents {
       ready: boolean;
       joinedAt: string;
     }>;
+    // ISO timestamps for client-side countdowns. startsAt is non-null
+    // while status='starting' (5 s lobby countdown). endsAt is non-
+    // null while status='active' (production phase) or 'voting'
+    // (poll phase). Both null while 'waiting'.
+    startsAt: string | null;
+    endsAt: string | null;
   }) => void;
   'battle:message': (data: {
     id: string;
