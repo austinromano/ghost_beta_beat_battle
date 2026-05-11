@@ -73,6 +73,12 @@ export interface ClientToServerEvents {
   'community:leave': (data: { roomId: string }) => void;
   'community:send': (data: { roomId: string; text?: string; audioFileId?: string; audioFileName?: string }) => void;
   'community:delete': (data: { roomId: string; messageId: string }) => void;
+  // Beat Battle lobby — v1 has a single shared room "the-arena". The
+  // client subscribes on lobby mount; server tracks participants
+  // in-memory and broadcasts state on every change.
+  'battle:join': (data: { battleId: string }) => void;
+  'battle:leave': (data: { battleId: string }) => void;
+  'battle:ready': (data: { battleId: string; ready: boolean }) => void;
   // Live per-user transport tick — client emits at ~10 Hz while playing so
   // collaborators see a ghost playhead following them.
   'transport:tick': (data: { projectId: string; currentTime: number; isPlaying: boolean }) => void;
@@ -167,6 +173,25 @@ export interface ServerToClientEvents {
     createdAt: string;
   }) => void;
   'community:message-deleted': (data: { roomId: string; messageId: string }) => void;
+  // Beat Battle lobby state — server pushes the entire participant
+  // list + ready states to every socket in the battle room whenever
+  // something changes. Clients diff against last received and render.
+  'battle:state': (data: {
+    battleId: string;
+    name: string;
+    status: 'waiting' | 'starting' | 'active' | 'voting' | 'complete';
+    kit: string;
+    timeLimit: number;
+    prizePool: number;
+    maxPlayers: number;
+    participants: Array<{
+      userId: string;
+      displayName: string;
+      avatarUrl: string | null;
+      ready: boolean;
+      joinedAt: string;
+    }>;
+  }) => void;
   // Lightweight arrangement broadcast — carries just the new JSON blob so
   // clients can patch their local state without refetching the entire
   // project detail (which includes peaks and can be 200-400 KB per track).

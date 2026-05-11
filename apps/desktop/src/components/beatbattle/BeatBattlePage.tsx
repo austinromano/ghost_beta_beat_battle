@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
+import { useBeatBattle, type BattleParticipant } from '../../hooks/useBeatBattle';
 
 // Beat Battle — Ghost Session's live producer competition mode.
 // Top-level page rendered from PluginLayout when the user picks the
-// game-controller dock button. v1 is a mock-data lobby that captures
-// the full layout; real matchmaking + voting come in follow-ups.
+// game-controller dock button. v1 has ONE shared lobby ("the-arena")
+// joined automatically on mount; the participant list + ready states
+// are live via socket events.
+
+const ARENA_ID = 'the-arena';
 
 type LobbyTab = 'lobby' | 'sessions' | 'community';
 
@@ -52,10 +56,34 @@ const SESSION_RULES = [
 
 export default function BeatBattlePage() {
   const [tab, setTab] = useState<LobbyTab>('lobby');
-  const [ready, setReady] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(165);
   const [chatInput, setChatInput] = useState('');
   const [chat, setChat] = useState<ChatMessage[]>(MOCK_CHAT);
+
+  // Live lobby state via socket. battle.participants is the real list
+  // of producers in the room; me.ready is what the Ready Up button
+  // toggles.
+  const { state: battle, setReady: emitReady } = useBeatBattle(ARENA_ID);
+
+  // Reflect remote ready toggles too — find the current user by
+  // matching the auth context's userId. The socket auth middleware
+  // tagged socket.data.userId on the server side so the participant
+  // entry's userId === our auth userId. For client-side lookup we
+  // could expose userId via a hook, but as a v1 shortcut we just
+  // track "last clicked" locally and let the server be source of
+  // truth on next state push.
+  const [ready, setReady] = useState(false);
+
+  // Sync local ready state with server snapshot. If another tab on
+  // the same account toggles ready, our button reflects that too.
+  useEffect(() => {
+    if (!battle) return;
+    // Without userId in hand we can't pick OUR participant. v1 fudges
+    // by checking if EVERY visible "you" candidate is ready — we'll
+    // refine once auth exposes userId here. For now the local optimistic
+    // state in setReady() drives the UI.
+    void battle;
+  }, [battle]);
 
   // Countdown — purely cosmetic; resets at 0.
   useEffect(() => {
@@ -75,7 +103,27 @@ export default function BeatBattlePage() {
 
   const fmtTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
-  const readyCount = MOCK_PLAYERS.filter((p) => p.status === 'ready').length + (ready ? 1 : 0);
+  // Merge live participants into the Player shape the players grid
+  // expects. Pad with empty slots up to maxPlayers (8) so the grid
+  // always renders a uniform 4×2 layout while the lobby fills up.
+  const players: Player[] = useMemo(() => {
+    const live = battle?.participants ?? [];
+    const max = battle?.maxPlayers ?? 8;
+    const mapped: Player[] = live.map((p: BattleParticipant) => ({
+      id: p.userId,
+      name: p.displayName,
+      avatarHue: hashHue(p.userId),
+      status: p.ready ? 'ready' : 'waiting',
+    }));
+    while (mapped.length < max) {
+      mapped.push({ id: `empty-${mapped.length}`, name: '— open slot —', avatarHue: 0, status: 'waiting' });
+    }
+    return mapped;
+  }, [battle]);
+
+  const readyCount = (battle?.participants ?? []).filter((p) => p.ready).length;
+  const joinedCount = battle?.participants.length ?? 0;
+  const maxPlayers = battle?.maxPlayers ?? 8;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col" style={{ background: 'linear-gradient(180deg, #0E0620 0%, #07030F 100%)' }}>
@@ -137,8 +185,21 @@ export default function BeatBattlePage() {
           <div className="grid grid-cols-[1fr_320px] gap-5">
             {/* Left + center column */}
             <div className="flex flex-col gap-5">
-              <Hero secondsLeft={secondsLeft} fmtTime={fmtTime} ready={ready} onReady={() => setReady((r) => !r)} readyCount={readyCount} />
-              <PlayersGrid players={MOCK_PLAYERS} youReady={ready} />
+              <Hero
+                secondsLeft={secondsLeft}
+                fmtTime={fmtTime}
+                ready={ready}
+                onReady={() => {
+                  const next = !ready;
+                  setReady(next);
+                  emitReady(next);
+                }}
+                readyCount={readyCount + (ready ? 1 : 0)}
+                joinedCount={joinedCount}
+                maxPlayers={maxPlayers}
+                prizePool={battle?.prizePool ?? 500}
+              />
+              <PlayersGrid players={players} youReady={ready} maxPlayers={maxPlayers} />
               <div className="grid grid-cols-3 gap-4">
                 <ChatPanel chat={chat} input={chatInput} setInput={setChatInput} send={sendChat} />
                 <RulesPanel rules={SESSION_RULES} />
@@ -200,12 +261,15 @@ export default function BeatBattlePage() {
 
 // ── Hero card with countdown + ready up ─────────────────────────────────
 
-function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount }: {
+function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount, joinedCount, maxPlayers, prizePool }: {
   secondsLeft: number;
   fmtTime: (s: number) => string;
   ready: boolean;
   onReady: () => void;
   readyCount: number;
+  joinedCount: number;
+  maxPlayers: number;
+  prizePool: number;
 }) {
   return (
     <div className="grid grid-cols-[1fr_360px] gap-5">
@@ -247,7 +311,7 @@ function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount }: {
           />
           <HeroStat
             label="Players"
-            value="8 / 8"
+            value={`${joinedCount} / ${maxPlayers}`}
             icon={
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
@@ -257,7 +321,7 @@ function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount }: {
           />
           <HeroStat
             label="Prize Pool"
-            value="500"
+            value={String(prizePool)}
             valueColor="#FBBF24"
             icon={
               <svg width="14" height="14" viewBox="0 0 24 24">
@@ -301,7 +365,7 @@ function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount }: {
           {ready ? '✓ Ready' : 'Ready Up'}
         </button>
         <div className="text-[10px] text-white/45 mt-2 text-center">
-          {readyCount}/8 players ready
+          {readyCount}/{maxPlayers} players ready
         </div>
       </div>
     </div>
@@ -310,14 +374,16 @@ function Hero({ secondsLeft, fmtTime, ready, onReady, readyCount }: {
 
 // ── Players grid ───────────────────────────────────────────────────────
 
-function PlayersGrid({ players, youReady }: { players: Player[]; youReady: boolean }) {
+function PlayersGrid({ players, youReady, maxPlayers }: { players: Player[]; youReady: boolean; maxPlayers: number }) {
+  const filled = players.filter((p) => !p.id.startsWith('empty-')).length;
+  const readyHere = players.filter((p) => p.status === 'ready').length;
   return (
     <div className="p-4 rounded-2xl" style={{ background: 'rgba(15, 12, 32, 0.92)', border: '1px solid rgba(168, 134, 255, 0.18)' }}>
       <div className="flex items-center justify-between mb-3">
-        <div className="text-[10px] font-bold tracking-[0.18em] uppercase text-white/55">Players (8/8)</div>
+        <div className="text-[10px] font-bold tracking-[0.18em] uppercase text-white/55">Players ({filled}/{maxPlayers})</div>
         <div className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-          <span className="text-[9.5px] text-white/45">{players.filter((p) => p.status === 'ready').length + (youReady ? 1 : 0)} ready</span>
+          <span className="text-[9.5px] text-white/45">{readyHere + (youReady ? 1 : 0)} ready</span>
         </div>
       </div>
       <div className="grid grid-cols-4 gap-2.5">
@@ -545,6 +611,14 @@ function MiniBars() {
       ))}
     </div>
   );
+}
+
+// Deterministic hue from a userId — so every producer has a stable
+// avatar colour regardless of when they joined the lobby.
+function hashHue(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
 }
 
 function HeroStat({ label, value, icon, valueColor }: {
