@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useBeatBattle, type BattleParticipant } from '../../hooks/useBeatBattle';
+import { useProjectStore } from '../../stores/projectStore';
 
 // Beat Battle — Ghost Session's live producer competition mode.
 // Top-level page rendered from PluginLayout when the user picks the
@@ -120,6 +121,36 @@ export default function BeatBattlePage() {
   const secondsLeft = target
     ? Math.max(0, Math.ceil((Date.parse(target) - now) / 1000))
     : 0;
+
+  // When production starts, drop the user into a fresh beat project so
+  // they can actually start cooking. PluginLayout listens for the
+  // 'ghost-open-project' event and will route us out of the lobby and
+  // into the new project. Keyed off (battleId × startsAt) so we create
+  // exactly one project per session — even if BeatBattlePage remounts
+  // (e.g. user navigates back to the lobby mid-session).
+  const createProject = useProjectStore((s) => s.createProject);
+  const autoOpenedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (status !== 'active' || !battle) return;
+    const sessionKey = `${battle.battleId}::${battle.startsAt ?? ''}`;
+    if (autoOpenedRef.current === sessionKey) return;
+    const persistedKey = 'beat-battle-auto-opened';
+    if (localStorage.getItem(persistedKey) === sessionKey) {
+      autoOpenedRef.current = sessionKey;
+      return;
+    }
+    autoOpenedRef.current = sessionKey;
+    (async () => {
+      try {
+        const name = `Beat Battle — ${battle.kit ?? 'Royale'}`;
+        const p = await createProject({ name, projectType: 'beat' } as any);
+        localStorage.setItem(persistedKey, sessionKey);
+        window.dispatchEvent(new CustomEvent('ghost-open-project', { detail: { projectId: p.id } }));
+      } catch {
+        autoOpenedRef.current = null;
+      }
+    })();
+  }, [status, battle?.battleId, battle?.startsAt, battle?.kit, createProject]);
 
   const sendChat = () => {
     const trimmed = chatInput.trim();
