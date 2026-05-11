@@ -270,7 +270,14 @@ export default function BeatBattlePage() {
       const socket = getSocket();
       socket?.emit('battle:leave', { battleId: ARENA_ID });
     } catch { /* socket may be down — server cleanup will catch us */ }
+    // Drop both the legacy unscoped key AND the current per-user key
+    // so a later Rejoin (even within the same active round) gets a
+    // fresh project instead of being dumped back into the abandoned
+    // one. Same key shape as the auto-open effect uses.
     try { localStorage.removeItem('beat-battle-auto-opened'); } catch { /* quota */ }
+    if (currentUserId) {
+      try { localStorage.removeItem(`beat-battle-auto-opened::${currentUserId}`); } catch { /* quota */ }
+    }
     setBattleOptOut(true);
     // We stay on the lobby — flipping opted-out re-renders the page
     // in spectator mode so the user keeps seeing who's still playing.
@@ -279,7 +286,17 @@ export default function BeatBattlePage() {
   // Reverse of quitBattle — wired to the "Rejoin Battle" CTA on the
   // opt-out splash. Clearing the flag re-arms useBeatBattle below,
   // which fires battle:join on its next mount and pulls fresh state.
+  // We also belt-and-braces clear the auto-open cache so the user
+  // always lands in a fresh project for the round they're rejoining.
   const rejoinBattle = () => {
+    try { localStorage.removeItem('beat-battle-auto-opened'); } catch { /* quota */ }
+    if (currentUserId) {
+      try { localStorage.removeItem(`beat-battle-auto-opened::${currentUserId}`); } catch { /* quota */ }
+    }
+    // Same goes for the autoOpenedRef sessionKey memo — without
+    // resetting it the effect's "I already handled this session"
+    // guard would short-circuit and skip the fresh-create path.
+    autoOpenedRef.current = null;
     setBattleOptOut(false);
   };
 

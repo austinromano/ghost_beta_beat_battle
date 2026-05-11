@@ -1042,7 +1042,14 @@ export default function PluginLayout() {
                               // collaborators bar all drop their battle chrome
                               // in the same tick (the shared hook re-renders
                               // every subscriber when this flips).
+                              // Clear both the legacy unscoped key AND the
+                              // per-user key so a later Rejoin (even within
+                              // the same active round) lands on a fresh
+                              // project instead of the one we just bailed on.
                               try { localStorage.removeItem('beat-battle-auto-opened'); } catch { /* quota */ }
+                              try {
+                                if (user?.id) localStorage.removeItem(`beat-battle-auto-opened::${user.id}`);
+                              } catch { /* quota */ }
                               setBattleOptOut(true);
                               // Land on the Beat Battle lobby (in spectator
                               // mode now that opt-out is set) instead of
