@@ -76,6 +76,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   deleteTrack: async (projectId, trackId) => {
     await api.deleteTrack(projectId, trackId);
+    // Unload the in-memory audio for this track BEFORE refetching the
+    // project so the AudioWorkletNode + scheduled BufferSource stop
+    // generating audio. Without this, the lane disappears from the
+    // UI but the user keeps hearing the deleted track on every play.
+    // Dynamic import keeps this store from circularly importing audio.
+    try {
+      const { useAudioStore } = await import('./audioStore');
+      useAudioStore.getState().unloadTrack(trackId);
+    } catch { /* audio store not initialised yet — nothing to unload */ }
     await get().fetchProject(projectId);
   },
 

@@ -1066,7 +1066,15 @@ export const useAudioStore = create<AudioState>((set, get) => {
     unloadTrack: (trackId) => {
       const { loadedTracks } = get();
       const track = loadedTracks.get(trackId);
-      if (track?.source) safeStop(track.source);
+      if (track) {
+        // Stop the BufferSource path and tear down the worklet path —
+        // either may be active depending on whether warp is on for
+        // this track. Without disposing the worklet, a track that the
+        // user just deleted keeps generating audio because its
+        // AudioWorkletNode stays connected to the master bus.
+        if (track.source) safeStop(track.source);
+        disposeWorkletController(track);
+      }
       const pendingTimer = pitchCommitTimers.get(trackId);
       if (pendingTimer) { clearTimeout(pendingTimer); pitchCommitTimers.delete(trackId); }
       trackCommittedPitch.delete(trackId);
